@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Jadwal Security Ganesa Satria</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            900: '#312e81',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- jsPDF & jsPDF-AutoTable untuk Generator PDF Handal -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- Canvas Confetti untuk Efek Selesai Berhasil -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        @media print {
+            .print-hidden { display: none !important; }
+            body { background-color: #ffffff; }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const Icon = ({ name, className = "w-5 h-5", ...props }) => {
+            const [svg, setSvg] = useState('');
+            useEffect(() => {
+                if (window.lucide) {
+                    const iconNode = window.lucide.icons[name];
+                    if (iconNode) {
+                        const svgString = iconNode.map(item => {
+                            const [tag, attrs] = item;
+                            const attrStr = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(' ');
+                            return `<${tag} ${attrStr}></${tag}>`;
+                        }).join('');
+                        setSvg(svgString);
+                    }
+                }
+            }, [name]);
+
+            return (
+                <svg 
+                    className={className}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    dangerouslySetInnerHTML={{ __html: svg }}
+                    {...props}
+                />
+            );
+        };
+
+        const DEFAULT_EMPLOYEES = [
+            { id: 'E1', name: 'Ahmad Fauzi', role: 'Full-Time', maxConsecutive: 5, prefShift: 'BOTH' },
+            { id: 'E2', name: 'Budi Santoso', role: 'Full-Time', maxConsecutive: 5, prefShift: 'BOTH' },
+            { id: 'E3', name: 'Citra Lestari', role: 'Full-Time', maxConsecutive: 4, prefShift: 'S1' },
+            { id: 'E4', name: 'Dewi Anggraini', role: 'Part-Time', maxConsecutive: 3, prefShift: 'BOTH' },
+            { id: 'E5', name: 'Eko Prasetyo', role: 'Full-Time', maxConsecutive: 5, prefShift: 'S2' },
+            { id: 'E6', name: 'Fitri Handayani', role: 'Full-Time', maxConsecutive: 5, prefShift: 'BOTH' },
+            { id: 'E7', name: 'Gilang Ramadhan', role: 'Part-Time', maxConsecutive: 3, prefShift: 'BOTH' },
+            { id: 'E8', name: 'Hana Natalia', role: 'Full-Time', maxConsecutive: 5, prefShift: 'BOTH' }
+        ];
+
+        const SHIFTS = {
+            S1: { id: 'S1', name: 'Pagi', label: 'P', start: '06:00', end: '18:00', color: 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100', isOff: false },
+            S2: { id: 'S2', name: 'Malam', label: 'M', start: '18:00', end: '06:00', color: 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100', isOff: false },
+            S1_FRI_SHORT: { id: 'S1_FRI_SHORT', name: 'P (12.00)', label: 'P (12.00)', start: '06:00', end: '12:00', color: 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100', isOff: false },
+            S1_FRI_FULL: { id: 'S1_FRI_FULL', name: 'P (18.00)', label: 'P (18.00)', start: '06:00', end: '18:00', color: 'bg-teal-50 text-teal-700 border-teal-200 hover:bg-teal-100', isOff: false },
+            OFF: { id: 'OFF', name: 'Libur', label: 'L', start: '-', end: '-', color: 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100', isOff: true }
+        };
+
+        function App() {
+            const [employees, setEmployees] = useState(() => {
+                const saved = localStorage.getItem('gs_employees');
+                return saved ? JSON.parse(saved) : DEFAULT_EMPLOYEES;
+            });
+
+            const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+            const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+            
+            // Mengatur sistem penyimpanan jadwal per-bulan
+            const [allSchedules, setAllSchedules] = useState(() => {
+                const saved = localStorage.getItem('gs_all_schedules');
+                return saved ? JSON.parse(saved) : {};
+            });
+
+            const currentKey = `${selectedYear}_${selectedMonth}`;
+            
+            const schedule = useMemo(() => {
+                return allSchedules[currentKey] || {};
+            }, [allSchedules, currentKey]);
+
+            const [activeTab, setActiveTab] = useState('schedule');
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [generationProgress, setGenerationProgress] = useState(0);
+            const [errorMsg, setErrorMsg] = useState('');
+            const [successMsg, setSuccessMsg] = useState('');
+            const [cellEditing, setCellEditing] = useState(null);
+            const [employeeToDelete, setEmployeeToDelete] = useState(null);
+
+            // Form states untuk tambah/edit karyawan
+            const [newEmpName, setNewEmpName] = useState('');
+            const [newEmpRole, setNewEmpRole] = useState('Full-Time');
+            const [newEmpPref, setNewEmpPref] = useState('BOTH');
+            const [newEmpMaxDays, setNewEmpMaxDays] = useState(5);
+            const [editingEmpId, setEditingEmpId] = useState(null);
+
+            useEffect(() => {
+                localStorage.setItem('gs_employees', JSON.stringify(employees));
+            }, [employees]);
+
+            useEffect(() => {
+                localStorage.setItem('gs_all_schedules', JSON.stringify(allSchedules));
+            }, [allSchedules]);
+
+            const daysInMonth = useMemo(() => {
+                return new Date(selectedYear, selectedMonth + 1, 0).getDate();
+            }, [selectedYear, selectedMonth]);
+
+            const daysArray = useMemo(() => {
+                const arr = [];
+                for (let i = 1; i <= daysInMonth; i++) {
+                    const date = new Date(selectedYear, selectedMonth, i);
+                    arr.push({ dayNum: i, dayOfWeek: date.getDay() });
+                }
+                return arr;
+            }, [daysInMonth, selectedYear, selectedMonth]);
+
+            const getDayName = (dayOfWeek) => {
+                return ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'][dayOfWeek];
+            };
+
+            const getMonthName = (monthIndex) => {
+                return [
+                    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 
+                    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+                ][monthIndex];
+            };
+
+            const generateSchedule = () => {
+                if (employees.length === 0) {
+                    setErrorMsg('Silakan tambahkan karyawan terlebih dahulu.');
+                    return;
+                }
+
+                setIsGenerating(true);
+                setGenerationProgress(10);
+
+                setTimeout(() => {
+                    try {
+                        let newMonthlySchedule = {};
+                        employees.forEach(emp => { newMonthlySchedule[emp.id] = {}; });
+
+                        const workDaysCount = {};
+                        const consecutiveDays = {};
+                        const lastShift = {};
+
+                        employees.forEach(emp => {
+                            workDaysCount[emp.id] = 0;
+                            consecutiveDays[emp.id] = 0;
+                            lastShift[emp.id] = null;
+                        });
+
+                        for (let d = 1; d <= daysInMonth; d++) {
+                            const date = new Date(selectedYear, selectedMonth, d);
+                            const dayOfWeek = date.getDay();
+                            const isFriday = dayOfWeek === 5;
+                            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                            let dailyPool = [...employees];
+                            const assignedToday = new Set();
+
+                            // 1. Aturan Shift Pagi (Sore/Malam/Akhir Pekan/Jumat)
+                            let morningQuota = isWeekend ? 1 : 2;
+                            let assignedMorning = 0;
+
+                            if (isFriday) {
+                                // Hari jumat dibagi: 1 P(12.00), 1 P(18.00)
+                                const fridayShifts = ['S1_FRI_SHORT', 'S1_FRI_FULL'];
+                                fridayShifts.forEach(fShiftId => {
+                                    dailyPool.sort((a, b) => {
+                                        let aPref = a.prefShift === 'S1' || a.prefShift === 'BOTH' ? -2 : 0;
+                                        let bPref = b.prefShift === 'S1' || b.prefShift === 'BOTH' ? -2 : 0;
+                                        return (workDaysCount[a.id] + aPref) - (workDaysCount[b.id] + bPref);
+                                    });
+
+                                    for (let i = 0; i < dailyPool.length; i++) {
+                                        const emp = dailyPool[i];
+                                        if (assignedToday.has(emp.id)) continue;
+
+                                        const maxAllowed = emp.maxConsecutive || 5;
+                                        if (consecutiveDays[emp.id] >= maxAllowed) continue;
+                                        if (lastShift[emp.id] === 'S2') continue; // Cegah Malam langsung ke Pagi
+
+                                        newMonthlySchedule[emp.id][d] = fShiftId;
+                                        assignedToday.add(emp.id);
+                                        workDaysCount[emp.id]++;
+                                        consecutiveDays[emp.id]++;
+                                        lastShift[emp.id] = fShiftId;
+                                        break;
+                                    }
+                                });
+                            } else {
+                                // Hari Biasa & Akhir Pekan (Shift Pagi Normal)
+                                dailyPool.sort((a, b) => {
+                                    let aPref = a.prefShift === 'S1' || a.prefShift === 'BOTH' ? -2 : 0;
+                                    let bPref = b.prefShift === 'S1' || b.prefShift === 'BOTH' ? -2 : 0;
+                                    return (workDaysCount[a.id] + aPref) - (workDaysCount[b.id] + bPref);
+                                });
+
+                                for (let i = 0; i < dailyPool.length; i++) {
+                                    if (assignedMorning >= morningQuota) break;
+                                    const emp = dailyPool[i];
+                                    if (assignedToday.has(emp.id)) continue;
+
+                                    const maxAllowed = emp.maxConsecutive || 5;
+                                    if (consecutiveDays[emp.id] >= maxAllowed) continue;
+                                    if (lastShift[emp.id] === 'S2') continue;
+
+                                    newMonthlySchedule[emp.id][d] = 'S1';
+                                    assignedToday.add(emp.id);
+                                    workDaysCount[emp.id]++;
+                                    consecutiveDays[emp.id]++;
+                                    lastShift[emp.id] = 'S1';
+                                    assignedMorning++;
+                                }
+                            }
+
+                            // 2. Aturan Shift Malam (Tetap 2 Personil)
+                            let nightQuota = 2;
+                            let assignedNight = 0;
+
+                            dailyPool.sort((a, b) => {
+                                let aPref = a.prefShift === 'S2' || a.prefShift === 'BOTH' ? -2 : 0;
+                                let bPref = b.prefShift === 'S2' || b.prefShift === 'BOTH' ? -2 : 0;
+                                return (workDaysCount[a.id] + aPref) - (workDaysCount[b.id] + bPref);
+                            });
+
+                            for (let i = 0; i < dailyPool.length; i++) {
+                                if (assignedNight >= nightQuota) break;
+                                const emp = dailyPool[i];
+                                if (assignedToday.has(emp.id)) continue;
+
+                                const maxAllowed = emp.maxConsecutive || 5;
+                                if (consecutiveDays[emp.id] >= maxAllowed) continue;
+
+                                newMonthlySchedule[emp.id][d] = 'S2';
+                                assignedToday.add(emp.id);
+                                workDaysCount[emp.id]++;
+                                consecutiveDays[emp.id]++;
+                                lastShift[emp.id] = 'S2';
+                                assignedNight++;
+                            }
+
+                            // 3. Menugaskan Libur (L)
+                            employees.forEach(emp => {
+                                if (!assignedToday.has(emp.id)) {
+                                    newMonthlySchedule[emp.id][d] = 'OFF';
+                                    consecutiveDays[emp.id] = 0;
+                                    lastShift[emp.id] = 'OFF';
+                                }
+                            });
+
+                            setGenerationProgress(Math.floor(10 + (d / daysInMonth) * 80));
+                        }
+
+                        setAllSchedules(prev => ({
+                            ...prev,
+                            [currentKey]: newMonthlySchedule
+                        }));
+                        
+                        setGenerationProgress(100);
+                        setTimeout(() => {
+                            setIsGenerating(false);
+                            confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+                            showSuccessNotification('Sukses generate jadwal baru secara otomatis!');
+                        }, 400);
+
+                    } catch (err) {
+                        setIsGenerating(false);
+                        setErrorMsg('Gagal menghasilkan jadwal secara otomatis.');
+                        console.error(err);
+                    }
+                }, 600);
+            };
+
+            const handleCellClick = (empId, day) => {
+                setCellEditing({ empId, day });
+            };
+
+            const selectManualShift = (shiftId) => {
+                if (!cellEditing) return;
+                const { empId, day } = cellEditing;
+
+                setAllSchedules(prev => {
+                    const currentSched = { ...(prev[currentKey] || {}) };
+                    currentSched[empId] = {
+                        ...(currentSched[empId] || {}),
+                        [day]: shiftId
+                    };
+                    return { ...prev, [currentKey]: currentSched };
+                });
+                setCellEditing(null);
+                showSuccessNotification('Jadwal berhasil disesuaikan manual.');
+            };
+
+            const showSuccessNotification = (msg) => {
+                setSuccessMsg(msg);
+                setTimeout(() => setSuccessMsg(''), 4000);
+            };
+
+            const securityCoverage = useMemo(() => {
+                let shortageDaysCount = 0;
+                let details = [];
+
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const date = new Date(selectedYear, selectedMonth, d);
+                    const dayOfWeek = date.getDay();
+                    const isFriday = dayOfWeek === 5;
+                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                    // Hitung staf terdaftar untuk hari tersebut
+                    let morningCount = 0;
+                    let nightCount = 0;
+
+                    employees.forEach(emp => {
+                        const shiftId = schedule[emp.id]?.[d];
+                        if (shiftId === 'S1' || shiftId === 'S1_FRI_SHORT' || shiftId === 'S1_FRI_FULL') {
+                            morningCount++;
+                        }
+                        if (shiftId === 'S2') {
+                            nightCount++;
+                        }
+                    });
+
+                    const targetMorning = isWeekend ? 1 : 2;
+                    const targetNight = 2;
+
+                    if (morningCount < targetMorning || nightCount < targetNight) {
+                        shortageDaysCount++;
+                        details.push({
+                            day: d,
+                            reason: `Kekurangan: ${morningCount < targetMorning ? 'Pagi ' : ''}${nightCount < targetNight ? 'Malam' : ''}`
+                        });
+                    }
+                }
+
+                return { shortageDaysCount, details };
+            }, [schedule, employees, daysInMonth, selectedMonth, selectedYear]);
+
+            const getEmployeeStats = (empId) => {
+                const stats = { S1: 0, S2: 0, S1_FRI_SHORT: 0, S1_FRI_FULL: 0, OFF: 0 };
+                let totalHours = 0;
+                let totalWorkDays = 0;
+
+                const empSchedule = schedule[empId] || {};
+                daysArray.forEach(d => {
+                    const shiftId = empSchedule[d.dayNum];
+                    if (shiftId && stats[shiftId] !== undefined) {
+                        stats[shiftId]++;
+                        if (shiftId === 'S1') { totalHours += 12; totalWorkDays++; }
+                        else if (shiftId === 'S2') { totalHours += 12; totalWorkDays++; }
+                        else if (shiftId === 'S1_FRI_SHORT') { totalHours += 6; totalWorkDays++; }
+                        else if (shiftId === 'S1_FRI_FULL') { totalHours += 12; totalWorkDays++; }
+                    }
+                });
+
+                return { stats, totalHours, totalWorkDays };
+            };
+
+            const handleAddOrEditEmployee = (e) => {
+                e.preventDefault();
+                if (!newEmpName.trim()) return;
+
+                if (editingEmpId) {
+                    setEmployees(prev => prev.map(emp => 
+                        emp.id === editingEmpId 
+                            ? { ...emp, name: newEmpName, role: newEmpRole, maxConsecutive: Number(newEmpMaxDays), prefShift: newEmpPref }
+                            : emp
+                    ));
+                    showSuccessNotification('Profil karyawan diperbarui!');
+                    setEditingEmpId(null);
+                } else {
+                    const newEmp = {
+                        id: 'E_' + Date.now(),
+                        name: newEmpName,
+                        role: newEmpRole,
+                        maxConsecutive: Number(newEmpMaxDays),
+                        prefShift: newEmpPref
+                    };
+                    setEmployees(prev => [...prev, newEmp]);
+                    showSuccessNotification('Karyawan baru terdaftar!');
+                }
+
+                setNewEmpName('');
+                setNewEmpRole('Full-Time');
+                setNewEmpPref('BOTH');
+                setNewEmpMaxDays(5);
+            };
+
+            const startEditEmployee = (emp) => {
+                setEditingEmpId(emp.id);
+                setNewEmpName(emp.name);
+                setNewEmpRole(emp.role);
+                setNewEmpPref(emp.prefShift || 'BOTH');
+                setNewEmpMaxDays(emp.maxConsecutive || 5);
+                setActiveTab('employees');
+            };
+
+            const confirmDeleteEmployee = () => {
+                if (!employeeToDelete) return;
+                const id = employeeToDelete.id;
+                setEmployees(prev => prev.filter(emp => emp.id !== id));
+                setAllSchedules(prev => {
+                    const updated = { ...prev };
+                    Object.keys(updated).forEach(key => {
+                        if (updated[key][id]) {
+                            delete updated[key][id];
+                        }
+                    });
+                    return updated;
+                });
+                showSuccessNotification('Karyawan berhasil dihapus.');
+                setEmployeeToDelete(null);
+            };
+
+            const exportToPDF = () => {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF('p', 'mm', 'a4');
+
+                doc.setFont("Inter", "bold");
+                doc.setFontSize(14);
+                doc.text("LEMBAR KERJA JADWAL (SHIFT 12 JAM)", 105, 15, { align: 'center' });
+                
+                doc.setFontSize(11);
+                doc.text("Security Yayasan Ganesa Satria Temanggung", 105, 21, { align: 'center' });
+                doc.text("SMK Ganesa Satria 4 Kedu", 105, 26, { align: 'center' });
+                
+                doc.setFont("Inter", "normal");
+                doc.setFontSize(10);
+                doc.text(`Bulan: ${getMonthName(selectedMonth)} ${selectedYear}`, 105, 32, { align: 'center' });
+
+                const tableHeaders = ['Tgl', 'Hari'];
+                employees.forEach(emp => {
+                    tableHeaders.push(emp.name);
+                });
+
+                const tableRows = daysArray.map(d => {
+                    const rowData = [
+                        d.dayNum,
+                        getDayName(d.dayOfWeek).substring(0, 3)
+                    ];
+                    
+                    employees.forEach(emp => {
+                        const shiftId = schedule[emp.id]?.[d.dayNum] || 'OFF';
+                        const label = SHIFTS[shiftId]?.label || 'L';
+                        rowData.push(label);
+                    });
+                    return rowData;
+                });
+
+                doc.autoTable({
+                    head: [tableHeaders],
+                    body: tableRows,
+                    startY: 38,
+                    theme: 'grid',
+                    styles: {
+                        fontSize: 8,
+                        halign: 'center',
+                        valign: 'middle',
+                        cellPadding: 1.5
+                    },
+                    headStyles: {
+                        fillColor: [79, 70, 229],
+                        textColor: [255, 255, 255],
+                        fontStyle: 'bold'
+                    },
+                    alternateRowStyles: {
+                        fillColor: [248, 250, 252]
+                    },
+                    columnStyles: {
+                        0: { cellWidth: 10, fontStyle: 'bold' },
+                        1: { cellWidth: 15 }
+                    },
+                    didParseCell: function (data) {
+                        if (data.row.index !== undefined) {
+                            const dayObj = daysArray[data.row.index];
+                            if (dayObj && dayObj.dayOfWeek === 5) {
+                                if (data.column.index > 1) {
+                                    data.cell.styles.fillColor = [224, 242, 254];
+                                }
+                            }
+                        }
+                    }
+                });
+
+                const finalY = doc.lastAutoTable.finalY + 10;
+                doc.setFontSize(8);
+                doc.setFont("Inter", "bold");
+                doc.text("Legenda Shift Kerja:", 15, finalY);
+                doc.setFont("Inter", "normal");
+                doc.text("P: Pagi (06:00 - 18:00) | M: Malam (18:00 - 06:00) | L: Libur (OFF)", 15, finalY + 4);
+                doc.text("P (12.00): Shift Pagi Pendek khusus Jumat (06:00 - 12:00)", 15, finalY + 8);
+                doc.text("P (18.00): Shift Pagi Penuh khusus Jumat (06:00 - 18:00)", 15, finalY + 12);
+
+                doc.save(`Jadwal_Security_${getMonthName(selectedMonth)}_${selectedYear}.pdf`);
+                showSuccessNotification('Sukses mengekspor jadwal PDF Vertikal!');
+            };
+
+            const triggerPrint = () => {
+                window.print();
+            };
+
+            return (
+                <div className="flex flex-col min-h-screen">
+                    <header className="bg-white border-b border-slate-200 sticky top-0 z-40 print:hidden">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex justify-between items-center h-16">
+                                <div className="flex items-center space-x-3">
+                                    <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-500/20">
+                                        <Icon name="CalendarDays" className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <h1 className="text-xl font-bold text-slate-950 tracking-tight">ShiftPlan</h1>
+                                        <p className="text-xs text-slate-500">Sistem Shift 12 Jam (Pagi & Malam)</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center space-x-2 text-sm text-slate-500 bg-slate-100 py-1.5 px-3 rounded-lg font-medium">
+                                    <Icon name="Clock" className="w-4 h-4 text-brand-600" />
+                                    <span>Tahun {selectedYear} - {getMonthName(selectedMonth)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0">
+                        
+                        {/* Toasts / Notifikasi */}
+                        {successMsg && (
+                            <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-xl flex items-center space-x-3 animate-bounce">
+                                <Icon name="CheckCircle2" className="text-emerald-400 w-5 h-5" />
+                                <span className="text-sm font-medium">{successMsg}</span>
+                            </div>
+                        )}
+
+                        {errorMsg && (
+                            <div className="fixed bottom-5 right-5 z-50 bg-red-600 text-white px-5 py-3 rounded-xl shadow-xl flex items-center space-x-3">
+                                <Icon name="AlertTriangle" className="text-white w-5 h-5" />
+                                <span className="text-sm font-medium">{errorMsg}</span>
+                                <button onClick={() => setErrorMsg('')} className="text-red-200 hover:text-white ml-2">
+                                    <Icon name="X" className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Ringkasan Dashboard (Widget Informasi Utama) */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8 print:hidden">
+                            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center space-x-4">
+                                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                                    <Icon name="Users" className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <p className="text-sm text-slate-500">Karyawan Aktif</p>
+                                    <p className="text-2xl font-bold text-slate-900">{employees.length} Personil</p>
+                                </div>
+                            </div>
+                            
+                            <div className={`p-5 rounded-2xl border shadow-sm flex items-center space-x-4 ${securityCoverage.shortageDaysCount > 0 ? 'bg-amber-50/50 border-amber-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
+                                <div className={`p-3 rounded-xl ${securityCoverage.shortageDaysCount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                    <Icon name="ShieldCheck" className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <p className="text-sm text-slate-600 font-medium">Status Pengamanan Pos</p>
+                                    <p className={`text-xl font-bold ${securityCoverage.shortageDaysCount > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
+                                        {securityCoverage.shortageDaysCount > 0 ? `Kekurangan ${securityCoverage.shortageDaysCount} Hari` : '100% Aman / Terpenuhi'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center space-x-4">
+                                <div className="p-3 bg-brand-50 text-brand-600 rounded-xl">
+                                    <Icon name="History" className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <p className="text-sm text-slate-500">Bulan Terekam</p>
+                                    <p className="text-2xl font-bold text-slate-900">{Object.keys(allSchedules).length} Arsip</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Tab Navigasi Menu */}
+                        <div className="flex border-b border-slate-200 mb-6 print:hidden overflow-x-auto space-x-1">
+                            <button 
+                                onClick={() => setActiveTab('schedule')}
+                                className={`flex items-center space-x-2 py-3 px-5 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === 'schedule' ? 'border-brand-600 text-brand-600 bg-brand-50/50 rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}
+                            >
+                                <Icon name="Grid" className="w-4 h-4" />
+                                <span>Papan Jadwal (Vertikal)</span>
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('employees')}
+                                className={`flex items-center space-x-2 py-3 px-5 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === 'employees' ? 'border-brand-600 text-brand-600 bg-brand-50/50 rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}
+                            >
+                                <Icon name="Users" className="w-4 h-4" />
+                                <span>Kelola Karyawan</span>
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('rules')}
+                                className={`flex items-center space-x-2 py-3 px-5 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === 'rules' ? 'border-brand-600 text-brand-600 bg-brand-50/50 rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}
+                            >
+                                <Icon name="Sliders" className="w-4 h-4" />
+                                <span>Ketentuan Operasional</span>
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('analytics')}
+                                className={`flex items-center space-x-2 py-3 px-5 border-b-2 font-medium text-sm transition-all whitespace-nowrap ${activeTab === 'analytics' ? 'border-brand-600 text-brand-600 bg-brand-50/50 rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}`}
+                            >
+                                <Icon name="BarChart3" className="w-4 h-4" />
+                                <span>Statistik & Riwayat (Khusus Manager)</span>
+                            </button>
+                        </div>
+
+                        {/* Tab Papan Jadwal Utama */}
+                        {activeTab === 'schedule' && (
+                            <div className="space-y-6">
+                                {/* Baris Tombol Kontrol */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4 print:hidden">
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <div className="flex flex-col">
+                                            <label className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Bulan</label>
+                                            <select 
+                                                value={selectedMonth} 
+                                                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                                                className="bg-slate-100 border-0 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-brand-500 cursor-pointer"
+                                            >
+                                                {Array.from({ length: 12 }).map((_, i) => (
+                                                    <option key={i} value={i}>{getMonthName(i)}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div className="flex flex-col">
+                                            <label className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Tahun</label>
+                                            <select 
+                                                value={selectedYear} 
+                                                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                                className="bg-slate-100 border-0 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-brand-500 cursor-pointer"
+                                            >
+                                                <option value={new Date().getFullYear()}>{new Date().getFullYear()}</option>
+                                                <option value={new Date().getFullYear() + 1}>{new Date().getFullYear() + 1}</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                                        <button 
+                                            onClick={generateSchedule}
+                                            disabled={isGenerating}
+                                            className="flex-1 md:flex-initial flex items-center justify-center space-x-2 bg-brand-600 hover:bg-brand-700 text-white font-semibold px-6 py-2.5 rounded-xl shadow-lg shadow-brand-500/10 transition-all disabled:opacity-50"
+                                        >
+                                            {isGenerating ? (
+                                                <>
+                                                    <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                                                    <span>Memproses {generationProgress}%</span>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Icon name="Sparkles" className="w-5 h-5" />
+                                                    <span>Generate Jadwal</span>
+                                                </>
+                                            )}
+                                        </button>
+
+                                        <button 
+                                            onClick={exportToPDF}
+                                            className="flex items-center justify-center space-x-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl transition-all font-medium"
+                                        >
+                                            <Icon name="Download" className="w-4 h-4" />
+                                            <span>Ekspor ke PDF</span>
+                                        </button>
+
+                                        <button 
+                                            onClick={triggerPrint}
+                                            className="flex items-center justify-center space-x-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl transition-all font-medium"
+                                        >
+                                            <Icon name="Printer" className="w-4 h-4" />
+                                            <span>Cetak Halaman</span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Papan Jadwal Terstruktur Vertikal (Menurun) */}
+                                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden p-6">
+                                    
+                                    {/* Judul & Header Resmi SMK Ganesa Satria */}
+                                    <div className="text-center mb-6 border-b pb-5">
+                                        <h2 className="text-xl font-bold text-slate-900 tracking-tight uppercase">Lembar Kerja Jadwal (Shift 12 Jam)</h2>
+                                        <p className="text-brand-600 font-bold text-sm tracking-wide">Security Yayasan Ganesa Satria Temanggung</p>
+                                        <p className="text-slate-500 text-xs font-semibold">SMK Ganesa Satria 4 Kedu</p>
+                                        <p className="text-slate-700 font-bold text-sm bg-indigo-50 inline-block px-4 py-1.5 rounded-full mt-3">
+                                            Bulan {getMonthName(selectedMonth)} {selectedYear}
+                                        </p>
+                                    </div>
+
+                                    {/* Penjelasan Ringkas Aturan Operasional */}
+                                    <div className="bg-sky-50 border border-sky-100 p-4 rounded-xl text-xs text-sky-800 space-y-1.5 print:hidden">
+                                        <div className="font-bold flex items-center gap-1.5">
+                                            <Icon name="Info" className="w-4 h-4" />
+                                            <span>Informasi Sistem Operasional Shift:</span>
+                                        </div>
+                                        <ul className="list-disc pl-5 space-y-1">
+                                            <li>Hari <strong>Sabtu & Minggu</strong>, kuota Shift Pagi berkurang menjadi <strong>1 Personil</strong> (Sisa personil otomatis libur).</li>
+                                            <li>Hari <strong>Jumat (Baris Biru)</strong>: Terbagi atas 1 personil pulang jam 12.00 (<strong className="text-amber-800 font-bold">P (12.00)</strong>) dan 1 personil pulang penuh jam 18.00 (<strong className="text-teal-800 font-bold">P (18.00)</strong>).</li>
+                                        </ul>
+                                    </div>
+
+                                    {/* Tabel Utama Penjadwalan */}
+                                    <div className="overflow-x-auto mt-6">
+                                        <table className="w-full text-left border-collapse border border-slate-200">
+                                            <thead>
+                                                <tr className="bg-indigo-600 text-white uppercase text-[11px] font-bold tracking-wider">
+                                                    <th className="py-3 px-3 border border-slate-200 text-center w-12">Tgl</th>
+                                                    <th className="py-3 px-3 border border-slate-200 text-center w-20">Hari</th>
+                                                    {employees.map(emp => (
+                                                        <th key={emp.id} className="py-3 px-3 border border-slate-200 text-center font-bold text-xs">
+                                                            {emp.name}
+                                                        </th>
+                                                    ))}
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {daysArray.map(d => {
+                                                    const isWeekend = d.dayOfWeek === 0 || d.dayOfWeek === 6;
+                                                    const isFriday = d.dayOfWeek === 5;
+                                                    
+                                                    let rowBg = "hover:bg-slate-50";
+                                                    if (isFriday) rowBg = "bg-sky-50/70 hover:bg-sky-100/50";
+                                                    else if (isWeekend) rowBg = "bg-rose-50/40 hover:bg-rose-100/30";
+
+                                                    return (
+                                                        <tr key={d.dayNum} className={rowBg}>
+                                                            <td className={`py-2 px-1 text-center font-bold border border-slate-200 text-xs ${isWeekend ? 'text-rose-600' : 'text-slate-800'}`}>
+                                                                {d.dayNum}
+                                                            </td>
+                                                            <td className={`py-2 px-2 text-center font-semibold border border-slate-200 text-xs ${isWeekend ? 'text-rose-600' : 'text-slate-500'}`}>
+                                                                {getDayName(d.dayOfWeek)}
+                                                            </td>
+                                                            
+                                                            {employees.map(emp => {
+                                                                const empSchedule = schedule[emp.id] || {};
+                                                                const shiftId = empSchedule[d.dayNum] || 'OFF';
+                                                                const shiftObj = SHIFTS[shiftId] || SHIFTS.OFF;
+
+                                                                return (
+                                                                    <td 
+                                                                        key={emp.id}
+                                                                        onClick={() => handleCellClick(emp.id, d.dayNum)}
+                                                                        className="py-1.5 px-2 text-center border border-slate-200 cursor-pointer transition-colors"
+                                                                    >
+                                                                        <div className={`py-1 px-1.5 rounded-lg border text-[11px] font-bold text-center select-none ${shiftObj.color}`}>
+                                                                            {shiftObj.label}
+                                                                        </div>
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab Kelola Karyawan */}
+                        {activeTab === 'employees' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                                {/* Form Pendaftaran */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm h-fit">
+                                    <h3 className="font-bold text-lg text-slate-900 mb-4">
+                                        {editingEmpId ? 'Perbarui Profil' : 'Daftarkan Staf Baru'}
+                                    </h3>
+                                    <form onSubmit={handleAddOrEditEmployee} className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-1">Nama Lengkap</label>
+                                            <input 
+                                                type="text" 
+                                                value={newEmpName}
+                                                onChange={(e) => setNewEmpName(e.target.value)}
+                                                placeholder="Contoh: Ahmad Fauzi"
+                                                className="w-full bg-slate-50 border-slate-200 border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                                                required
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-sm font-semibold text-slate-700 mb-1">Status Kontrak</label>
+                                                <select 
+                                                    value={newEmpRole}
+                                                    onChange={(e) => setNewEmpRole(e.target.value)}
+                                                    className="w-full bg-slate-50 border-slate-200 border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all cursor-pointer"
+                                                >
+                                                    <option value="Full-Time">Full-Time</option>
+                                                    <option value="Part-Time">Part-Time</option>
+                                                    <option value="Magang">Magang</option>
+                                                </select>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm font-semibold text-slate-700 mb-1">Maks. Beruntun</label>
+                                                <input 
+                                                    type="number" 
+                                                    min="1" 
+                                                    max="7"
+                                                    value={newEmpMaxDays}
+                                                    onChange={(e) => setNewEmpMaxDays(e.target.value)}
+                                                    className="w-full bg-slate-50 border-slate-200 border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                                                    required
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-1">Preferensi Shift</label>
+                                            <select 
+                                                value={newEmpPref}
+                                                onChange={(e) => setNewEmpPref(e.target.value)}
+                                                className="w-full bg-slate-50 border-slate-200 border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                                            >
+                                                <option value="BOTH">Bisa Keduanya (Pagi & Malam)</option>
+                                                <option value="S1">Prioritaskan Shift Pagi</option>
+                                                <option value="S2">Prioritaskan Shift Malam</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 pt-2">
+                                            <button 
+                                                type="submit"
+                                                className="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 px-4 rounded-xl shadow-lg shadow-brand-500/10 transition-all text-sm flex items-center justify-center space-x-2"
+                                            >
+                                                <Icon name={editingEmpId ? "Check" : "Plus"} className="w-4 h-4" />
+                                                <span>{editingEmpId ? 'Simpan' : 'Daftarkan'}</span>
+                                            </button>
+                                            {editingEmpId && (
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setEditingEmpId(null);
+                                                        setNewEmpName('');
+                                                    }}
+                                                    className="border border-slate-200 hover:bg-slate-50 text-slate-500 py-2.5 px-3 rounded-xl text-sm transition-all"
+                                                >
+                                                    Batal
+                                                </button>
+                                            )}
+                                        </div>
+                                    </form>
+                                </div>
+
+                                {/* Daftar Karyawan Aktif */}
+                                <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                                    <h3 className="font-bold text-lg text-slate-900 mb-4">Daftar Security Aktif</h3>
+                                    <div className="divide-y divide-slate-100">
+                                        {employees.length === 0 ? (
+                                            <div className="py-12 text-center text-slate-400">
+                                                <Icon name="Users" className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                                                Belum ada staf yang terdaftar.
+                                            </div>
+                                        ) : (
+                                            employees.map(emp => (
+                                                <div key={emp.id} className="py-4 flex justify-between items-center hover:bg-slate-50/50 px-2 rounded-xl transition-all">
+                                                    <div className="flex items-center space-x-3">
+                                                        <div className="w-10 h-10 bg-indigo-50 text-brand-700 rounded-xl flex items-center justify-center font-bold">
+                                                            {emp.name.substring(0, 2).toUpperCase()}
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="font-semibold text-slate-900 text-sm">{emp.name}</h4>
+                                                            <div className="flex items-center space-x-2 text-xs text-slate-400 mt-0.5">
+                                                                <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">{emp.role}</span>
+                                                                <span>•</span>
+                                                                <span>Maks. kerja beruntun: {emp.maxConsecutive || 5} hari</span>
+                                                                <span>•</span>
+                                                                <span className="text-emerald-600 font-semibold">
+                                                                    {emp.prefShift === 'BOTH' ? 'Bisa Keduanya' : `Pref: Shift ${SHIFTS[emp.prefShift]?.name}`}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div className="flex items-center space-x-1.5">
+                                                        <button 
+                                                            onClick={() => startEditEmployee(emp)}
+                                                            className="p-2 text-slate-400 hover:text-brand-600 hover:bg-slate-100 rounded-lg transition-all"
+                                                        >
+                                                            <Icon name="Pencil" className="w-4 h-4" />
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => setEmployeeToDelete(emp)}
+                                                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                                        >
+                                                            <Icon name="Trash2" className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab Ketentuan Operasional */}
+                        {activeTab === 'rules' && (
+                            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm max-w-2xl mx-auto">
+                                <h3 className="font-bold text-lg text-slate-900 mb-4">Ketentuan Operasional & Hari Khusus</h3>
+                                <p className="text-sm text-slate-500 mb-6">Sistem Shift Ganesa Satria secara otomatis dikonfigurasi mengikuti beberapa kebijakan khusus berikut:</p>
+
+                                <div className="space-y-4">
+                                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex items-start space-x-3">
+                                        <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg">
+                                            <Icon name="Calendar" className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm text-slate-900">Sabtu & Minggu (Shift Pagi 1 Orang)</h4>
+                                            <p className="text-xs text-slate-500 mt-1">Sistem akan secara otomatis mengurangi kuota pagi di akhir pekan menjadi hanya 1 staf, sehingga sisa tim dapat menikmati libur bergantian secara adil.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex items-start space-x-3">
+                                        <div className="p-2 bg-sky-100 text-sky-700 rounded-lg">
+                                            <Icon name="Clock" className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm text-slate-900">Jumat Pendek (Kepulangan Khusus)</h4>
+                                            <p className="text-xs text-slate-500 mt-1">Karena sekolah tutup lebih awal, 1 personil akan pulang jam 12.00 (ditandai label P 12.00) dan 1 personil lainnya pulang jam 18.00 (P 18.00).</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex items-start space-x-3">
+                                        <div className="p-2 bg-amber-100 text-amber-700 rounded-lg">
+                                            <Icon name="Heart" className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm text-slate-900">Proteksi Kelelahan Staf</h4>
+                                            <p className="text-xs text-slate-500 mt-1">Setiap staf dilarang keras masuk Shift Pagi pada hari setelah mereka menyelesaikan Shift Malam sebelumnya demi menjaga keselamatan fisik tim.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab Statistik & Riwayat Jadwal Bulan Sebelumnya */}
+                        {activeTab === 'analytics' && (
+                            <div className="space-y-8">
+                                {/* Total Kinerja Jam Kerja Karyawan */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                                    <h3 className="font-bold text-lg text-slate-900 mb-2">Statistik Kinerja & Beban Jam Kerja Karyawan</h3>
+                                    <p className="text-sm text-slate-500 mb-6">Ringkasan akumulasi jam kerja bulanan untuk masing-masing personil demi mengontrol beban kerja yang merata.</p>
+                                    
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                        {employees.map(emp => {
+                                            const { stats, totalHours, totalWorkDays } = getEmployeeStats(emp.id);
+                                            return (
+                                                <div key={emp.id} className="border border-slate-100 p-4 rounded-xl bg-slate-50">
+                                                    <div className="flex justify-between items-center mb-3">
+                                                        <div>
+                                                            <h4 className="font-bold text-slate-900 text-sm">{emp.name}</h4>
+                                                            <span className="text-[10px] bg-indigo-100 text-brand-700 px-2 py-0.5 rounded-full font-bold">{emp.role}</span>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <span className="text-sm font-extrabold text-brand-600">{totalHours} Jam Kerja</span>
+                                                            <p className="text-[10px] text-slate-400">{totalWorkDays} Hari Masuk</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-4 gap-2 text-center">
+                                                        <div className="bg-white p-2 rounded border border-slate-100">
+                                                            <span className="text-[10px] text-slate-400 block">Pagi (P)</span>
+                                                            <span className="text-xs font-bold">{stats.S1 + stats.S1_FRI_FULL}x</span>
+                                                        </div>
+                                                        <div className="bg-white p-2 rounded border border-slate-100">
+                                                            <span className="text-[10px] text-slate-400 block">Malam (M)</span>
+                                                            <span className="text-xs font-bold">{stats.S2}x</span>
+                                                        </div>
+                                                        <div className="bg-white p-2 rounded border border-slate-100">
+                                                            <span className="text-[10px] text-slate-400 block">P 12.00</span>
+                                                            <span className="text-xs font-bold">{stats.S1_FRI_SHORT}x</span>
+                                                        </div>
+                                                        <div className="bg-white p-2 rounded border border-slate-100">
+                                                            <span className="text-[10px] text-slate-400 block">Libur (L)</span>
+                                                            <span className="text-xs font-bold">{stats.OFF}x</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Arsip & Riwayat Jadwal Bulan Sebelumnya */}
+                                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                                    <h3 className="font-bold text-lg text-slate-900 mb-2">Arsip & Riwayat Jadwal Bulanan</h3>
+                                    <p className="text-sm text-slate-500 mb-6">Gunakan tombol di bawah ini untuk melihat kembali atau menghapus arsip bulan-bulan sebelumnya yang terekam.</p>
+
+                                    <div className="divide-y divide-slate-100">
+                                        {Object.keys(allSchedules).length === 0 ? (
+                                            <div className="py-8 text-center text-slate-400">
+                                                <Icon name="Folder" className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+                                                Belum ada arsip jadwal bulanan yang terekam.
+                                            </div>
+                                        ) : (
+                                            Object.keys(allSchedules).map(key => {
+                                                const [year, month] = key.split('_');
+                                                const isCurrent = key === currentKey;
+
+                                                return (
+                                                    <div key={key} className="py-3 flex justify-between items-center hover:bg-slate-50 px-2 rounded-lg transition-all">
+                                                        <div className="flex items-center space-x-3">
+                                                            <div className="w-8 h-8 bg-brand-50 text-brand-600 rounded-lg flex items-center justify-center">
+                                                                <Icon name="FileText" className="w-4 h-4" />
+                                                            </div>
+                                                            <div>
+                                                                <h4 className="font-bold text-sm text-slate-900">
+                                                                    Bulan {getMonthName(Number(month))} {year}
+                                                                </h4>
+                                                                <span className="text-[10px] text-slate-400">
+                                                                    {isCurrent ? 'Sedang Dibuka' : 'Arsip Tersimpan'}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="flex items-center space-x-2">
+                                                            <button 
+                                                                onClick={() => {
+                                                                    setSelectedMonth(Number(month));
+                                                                    setSelectedYear(Number(year));
+                                                                    setActiveTab('schedule');
+                                                                    showSuccessNotification(`Arsip ${getMonthName(Number(month))} berhasil dibuka.`);
+                                                                }}
+                                                                className="px-3 py-1 bg-slate-100 hover:bg-brand-50 text-slate-700 hover:text-brand-600 text-xs font-semibold rounded-lg transition-all"
+                                                            >
+                                                                Buka Jadwal
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => {
+                                                                    if (window.confirm('Hapus arsip bulan ini?')) {
+                                                                        setAllSchedules(prev => {
+                                                                            const copy = { ...prev };
+                                                                            delete copy[key];
+                                                                            return copy;
+                                                                        });
+                                                                        showSuccessNotification('Arsip berhasil dibuang.');
+                                                                    }
+                                                                }}
+                                                                className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors"
+                                                            >
+                                                                <Icon name="Trash2" className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="bg-white border-t border-slate-200 py-6 mt-12 print:hidden text-center text-xs text-slate-400">
+                        <p>© 2026 ShiftPlan Ganesa Satria. Semua jatah data & sistem dijamin presisi dan adil.</p>
+                    </footer>
+
+                    {/* Modal Ganti Shift Manual */}
+                    {cellEditing && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+                                <div className="flex justify-between items-start mb-4">
+                                    <div>
+                                        <h3 className="font-bold text-lg text-slate-900">Ubah Shift Manual</h3>
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            {employees.find(e => e.id === cellEditing.empId)?.name} • Tanggal {cellEditing.day} {getMonthName(selectedMonth)}
+                                        </p>
+                                    </div>
+                                    <button 
+                                        onClick={() => setCellEditing(null)}
+                                        className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
+                                    >
+                                        <Icon name="X" className="w-5 h-5" />
+                                    </button>
+                                </div>
+
+                                <div className="space-y-2">
+                                    {Object.values(SHIFTS).map(s => (
+                                        <button
+                                            key={s.id}
+                                            onClick={() => selectManualShift(s.id)}
+                                            className={`w-full p-3.5 rounded-xl border text-left flex justify-between items-center transition-all ${s.color}`}
+                                        >
+                                            <span className="font-bold text-sm">Shift {s.name} ({s.label})</span>
+                                            <span className="text-xs opacity-75">{s.start} - {s.end}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Modal Konfirmasi Hapus Karyawan */}
+                    {employeeToDelete && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl animate-in fade-in scale-in duration-150">
+                                <div className="flex items-start space-x-3 text-rose-600 mb-4">
+                                    <div className="p-2 bg-rose-50 rounded-lg">
+                                        <Icon name="AlertTriangle" className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-lg text-slate-900">Hapus Karyawan?</h3>
+                                        <p className="text-sm text-slate-500 mt-1">
+                                            Apakah Anda yakin ingin menghapus <strong>{employeeToDelete.name}</strong>? Tindakan ini akan menghapus data jadwal yang bersangkutan secara permanen.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end space-x-3">
+                                    <button
+                                        onClick={() => setEmployeeToDelete(null)}
+                                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-sm transition-colors"
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        onClick={confirmDeleteEmployee}
+                                        className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl text-sm shadow-lg shadow-rose-600/15 transition-colors"
+                                    >
+                                        Ya, Hapus
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // Render React App
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
