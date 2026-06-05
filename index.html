@@ -171,6 +171,15 @@
                 return allSchedules[currentKey] || {};
             }, [allSchedules, currentKey]);
 
+            const [allRequests, setAllRequests] = useState(() => {
+                const saved = localStorage.getItem('gs_all_requests');
+                return saved ? JSON.parse(saved) : {};
+            });
+
+            const currentRequests = useMemo(() => {
+                return allRequests[currentKey] || {};
+            }, [allRequests, currentKey]);
+
             const [activeTab, setActiveTab] = useState('schedule');
             const [isGenerating, setIsGenerating] = useState(false);
             const [generationProgress, setGenerationProgress] = useState(0);
@@ -200,6 +209,10 @@
                 localStorage.setItem('gs_all_schedules', JSON.stringify(allSchedules));
             }, [allSchedules]);
 
+            useEffect(() => {
+                localStorage.setItem('gs_all_requests', JSON.stringify(allRequests));
+            }, [allRequests]);
+
             // Listen Firebase auth state changes - shared workspace
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
@@ -212,6 +225,7 @@
                                 const data = docSnap.data();
                                 if (data.employees && Array.isArray(data.employees)) setEmployees(data.employees);
                                 if (data.allSchedules) setAllSchedules(data.allSchedules);
+                                if (data.allRequests) setAllRequests(data.allRequests);
                             }
                         } catch (e) {
                             console.error('Firestore load error:', e);
@@ -235,6 +249,7 @@
                         await db.collection('global').doc('data').set({
                             employees: employees,
                             allSchedules: allSchedules,
+                            allRequests: allRequests,
                             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
                     } catch (e) {
@@ -244,7 +259,7 @@
                 return () => {
                     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
                 };
-            }, [employees, allSchedules, user, firestoreReady]);
+            }, [employees, allSchedules, allRequests, user, firestoreReady]);
 
             const handleLogin = async () => {
                 try {
@@ -321,18 +336,30 @@
                             let dailyPool = [...employees];
                             const assignedToday = new Set();
 
+                            // 0. Pre-assign OFF requests (libur yang diminta)
+                            dailyPool.forEach(emp => {
+                                const req = currentRequests[emp.id]?.[d];
+                                if (req === 'OFF') {
+                                    newMonthlySchedule[emp.id][d] = 'OFF';
+                                    assignedToday.add(emp.id);
+                                    consecutiveDays[emp.id] = 0;
+                                    lastShift[emp.id] = 'OFF';
+                                }
+                            });
+
                             // 1. Aturan Shift Pagi (Sore/Malam/Akhir Pekan/Jumat)
                             let morningQuota = isWeekend ? 1 : 2;
                             let assignedMorning = 0;
 
                             if (isFriday) {
-                                // Hari jumat dibagi: 1 P(12.00), 1 P(18.00)
                                 const fridayShifts = ['S1_FRI_SHORT', 'S1_FRI_FULL'];
                                 fridayShifts.forEach(fShiftId => {
                                     dailyPool.sort((a, b) => {
+                                        const aReq = currentRequests[a.id]?.[d] === 'S1' ? -10 : 0;
+                                        const bReq = currentRequests[b.id]?.[d] === 'S1' ? -10 : 0;
                                         let aPref = a.prefShift === 'S1' || a.prefShift === 'BOTH' ? -2 : 0;
                                         let bPref = b.prefShift === 'S1' || b.prefShift === 'BOTH' ? -2 : 0;
-                                        return (workDaysCount[a.id] + aPref) - (workDaysCount[b.id] + bPref);
+                                        return (workDaysCount[a.id] + aPref + aReq) - (workDaysCount[b.id] + bPref + bReq);
                                     });
 
                                     for (let i = 0; i < dailyPool.length; i++) {
@@ -341,7 +368,7 @@
 
                                         const maxAllowed = emp.maxConsecutive || 5;
                                         if (consecutiveDays[emp.id] >= maxAllowed) continue;
-                                        if (lastShift[emp.id] === 'S2') continue; // Cegah Malam langsung ke Pagi
+                                        if (lastShift[emp.id] === 'S2') continue;
 
                                         newMonthlySchedule[emp.id][d] = fShiftId;
                                         assignedToday.add(emp.id);
@@ -352,11 +379,12 @@
                                     }
                                 });
                             } else {
-                                // Hari Biasa & Akhir Pekan (Shift Pagi Normal)
                                 dailyPool.sort((a, b) => {
+                                    const aReq = currentRequests[a.id]?.[d] === 'S1' ? -10 : 0;
+                                    const bReq = currentRequests[b.id]?.[d] === 'S1' ? -10 : 0;
                                     let aPref = a.prefShift === 'S1' || a.prefShift === 'BOTH' ? -2 : 0;
                                     let bPref = b.prefShift === 'S1' || b.prefShift === 'BOTH' ? -2 : 0;
-                                    return (workDaysCount[a.id] + aPref) - (workDaysCount[b.id] + bPref);
+                                    return (workDaysCount[a.id] + aPref + aReq) - (workDaysCount[b.id] + bPref + bReq);
                                 });
 
                                 for (let i = 0; i < dailyPool.length; i++) {
@@ -382,9 +410,11 @@
                             let assignedNight = 0;
 
                             dailyPool.sort((a, b) => {
+                                const aReq = currentRequests[a.id]?.[d] === 'S2' ? -10 : 0;
+                                const bReq = currentRequests[b.id]?.[d] === 'S2' ? -10 : 0;
                                 let aPref = a.prefShift === 'S2' || a.prefShift === 'BOTH' ? -2 : 0;
                                 let bPref = b.prefShift === 'S2' || b.prefShift === 'BOTH' ? -2 : 0;
-                                return (workDaysCount[a.id] + aPref) - (workDaysCount[b.id] + bPref);
+                                return (workDaysCount[a.id] + aPref + aReq) - (workDaysCount[b.id] + bPref + bReq);
                             });
 
                             for (let i = 0; i < dailyPool.length; i++) {
@@ -453,6 +483,33 @@
                 });
                 setCellEditing(null);
                 showSuccessNotification('Jadwal berhasil disesuaikan manual.');
+            };
+
+            const handleSetRequest = (shiftId) => {
+                if (!cellEditing) return;
+                const { empId, day } = cellEditing;
+
+                setAllRequests(prev => {
+                    const currentReq = { ...(prev[currentKey] || {}) };
+                    if (shiftId === null) {
+                        if (currentReq[empId]) {
+                            const { [day]: _, ...rest } = currentReq[empId];
+                            currentReq[empId] = Object.keys(rest).length ? rest : undefined;
+                        }
+                    } else {
+                        currentReq[empId] = {
+                            ...(currentReq[empId] || {}),
+                            [day]: shiftId
+                        };
+                    }
+                    return { ...prev, [currentKey]: currentReq };
+                });
+                setCellEditing(null);
+                showSuccessNotification(
+                    shiftId === null
+                        ? 'Request berhasil dihapus.'
+                        : `Request ${SHIFTS[shiftId]?.name || shiftId} tersimpan.`
+                );
             };
 
             const showSuccessNotification = (msg) => {
@@ -894,6 +951,7 @@
                                         <ul className="list-disc pl-5 space-y-1">
                                             <li>Hari <strong>Sabtu & Minggu</strong>, kuota Shift Pagi berkurang menjadi <strong>1 Personil</strong> (Sisa personil otomatis libur).</li>
                                             <li>Hari <strong>Jumat (Baris Biru)</strong>: Terbagi atas 1 personil pulang jam 12.00 (<strong className="text-amber-800 font-bold">P (12.00)</strong>) dan 1 personil pulang penuh jam 18.00 (<strong className="text-teal-800 font-bold">P (18.00)</strong>).</li>
+                                            <li>Klik sel jadwal untuk set <strong>Request</strong> (libur/masuk shift) — akan diprioritaskan saat generate.</li>
                                         </ul>
                                     </div>
 
@@ -933,16 +991,25 @@
                                                                 const empSchedule = schedule[emp.id] || {};
                                                                 const shiftId = empSchedule[d.dayNum] || 'OFF';
                                                                 const shiftObj = SHIFTS[shiftId] || SHIFTS.OFF;
+                                                                const reqShiftId = currentRequests[emp.id]?.[d.dayNum];
+                                                                const reqObj = reqShiftId ? SHIFTS[reqShiftId] : null;
 
                                                                 return (
                                                                     <td 
                                                                         key={emp.id}
                                                                         onClick={() => handleCellClick(emp.id, d.dayNum)}
-                                                                        className="py-1.5 px-2 text-center border border-slate-200 cursor-pointer transition-colors"
+                                                                        className="py-1.5 px-2 text-center border border-slate-200 cursor-pointer transition-colors relative"
                                                                     >
                                                                         <div className={`py-1 px-1.5 rounded-lg border text-[11px] font-bold text-center select-none ${shiftObj.color}`}>
                                                                             {shiftObj.label}
                                                                         </div>
+                                                                        {reqObj && (
+                                                                            <div 
+                                                                                title={`Request: ${reqObj.name}`}
+                                                                                className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white shadow-xs"
+                                                                                style={{ backgroundColor: reqObj.isOff ? '#f43f5e' : reqObj.id === 'S1' ? '#10b981' : '#6366f1' }}
+                                                                            />
+                                                                        )}
                                                                     </td>
                                                                 );
                                                             })}
@@ -1257,13 +1324,13 @@
                         <p>© 2026 ShiftPlan Ganesa Satria. Semua jatah data & sistem dijamin presisi dan adil.</p>
                     </footer>
 
-                    {/* Modal Ganti Shift Manual */}
+                    {/* Modal Request & Ganti Shift Manual */}
                     {cellEditing && (
                         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
                             <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
                                 <div className="flex justify-between items-start mb-4">
                                     <div>
-                                        <h3 className="font-bold text-lg text-slate-900">Ubah Shift Manual</h3>
+                                        <h3 className="font-bold text-lg text-slate-900">Jadwal & Request</h3>
                                         <p className="text-xs text-slate-500 mt-1">
                                             {employees.find(e => e.id === cellEditing.empId)?.name} • Tanggal {cellEditing.day} {getMonthName(selectedMonth)}
                                         </p>
@@ -1276,14 +1343,69 @@
                                     </button>
                                 </div>
 
+                                {/* Section Request */}
+                                <div className="mb-5">
+                                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Request Karyawan</h4>
+                                    <p className="text-xs text-slate-500 mb-2.5">Setel permintaan sebelum generate agar jadwal otomatis menyesuaikan.</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => handleSetRequest('OFF')}
+                                            className={`p-2.5 rounded-xl border text-center transition-all text-xs font-bold ${
+                                                currentRequests[cellEditing.empId]?.[cellEditing.day] === 'OFF'
+                                                    ? 'bg-rose-100 text-rose-700 border-rose-300 ring-2 ring-rose-200'
+                                                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-rose-50 hover:border-rose-200'
+                                            }`}
+                                        >
+                                            Libur
+                                        </button>
+                                        <button
+                                            onClick={() => handleSetRequest('S1')}
+                                            className={`p-2.5 rounded-xl border text-center transition-all text-xs font-bold ${
+                                                currentRequests[cellEditing.empId]?.[cellEditing.day] === 'S1'
+                                                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300 ring-2 ring-emerald-200'
+                                                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-emerald-50 hover:border-emerald-200'
+                                            }`}
+                                        >
+                                            Masuk Pagi
+                                        </button>
+                                        <button
+                                            onClick={() => handleSetRequest('S2')}
+                                            className={`p-2.5 rounded-xl border text-center transition-all text-xs font-bold ${
+                                                currentRequests[cellEditing.empId]?.[cellEditing.day] === 'S2'
+                                                    ? 'bg-indigo-100 text-indigo-700 border-indigo-300 ring-2 ring-indigo-200'
+                                                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
+                                            }`}
+                                        >
+                                            Masuk Malam
+                                        </button>
+                                        <button
+                                            onClick={() => handleSetRequest(null)}
+                                            className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700 text-center transition-all text-xs font-bold"
+                                        >
+                                            Hapus
+                                        </button>
+                                    </div>
+                                    {currentRequests[cellEditing.empId]?.[cellEditing.day] && (
+                                        <p className="text-xs text-emerald-600 mt-2 flex items-center gap-1">
+                                            <Icon name="CheckCircle2" className="w-3.5 h-3.5" />
+                                            Request tersimpan (akan diprioritaskan saat generate)
+                                        </p>
+                                    )}
+                                </div>
+
+                                <hr className="border-slate-100 mb-4" />
+
+                                {/* Section Manual Shift */}
+                                <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Ubah Jadwal Manual</h4>
+                                <p className="text-xs text-slate-500 mb-2.5">Terapkan langsung setelah generate jika ada penyesuaian.</p>
                                 <div className="space-y-2">
                                     {Object.values(SHIFTS).map(s => (
                                         <button
                                             key={s.id}
                                             onClick={() => selectManualShift(s.id)}
-                                            className={`w-full p-3.5 rounded-xl border text-left flex justify-between items-center transition-all ${s.color}`}
+                                            className={`w-full p-3 rounded-xl border text-left flex justify-between items-center transition-all text-sm ${s.color}`}
                                         >
-                                            <span className="font-bold text-sm">Shift {s.name} ({s.label})</span>
+                                            <span className="font-bold">Shift {s.name} ({s.label})</span>
                                             <span className="text-xs opacity-75">{s.start} - {s.end}</span>
                                         </button>
                                     ))}
