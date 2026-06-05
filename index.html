@@ -715,21 +715,34 @@
                 showSuccessNotification('Sukses mengekspor jadwal PDF Vertikal!');
             };
 
+            const forceSync = async (updatedRequests, updatedSchedules) => {
+                if (!user) return;
+                if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+                try {
+                    await db.collection('global').doc('data').set({
+                        employees: employees,
+                        allSchedules: updatedSchedules ?? allSchedules,
+                        allRequests: updatedRequests ?? allRequests,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                } catch (e) {
+                    console.error('Firestore force sync error:', e);
+                }
+            };
+
             const clearRequests = () => {
-                setAllRequests(prev => {
-                    const updated = { ...prev };
-                    delete updated[currentKey];
-                    return updated;
-                });
+                const updated = { ...allRequests };
+                delete updated[currentKey];
+                setAllRequests(updated);
+                forceSync(updated, null);
                 showSuccessNotification('Semua request bulan ini telah dihapus.');
             };
 
             const clearSchedule = () => {
-                setAllSchedules(prev => {
-                    const updated = { ...prev };
-                    delete updated[currentKey];
-                    return updated;
-                });
+                const updated = { ...allSchedules };
+                delete updated[currentKey];
+                setAllSchedules(updated);
+                forceSync(null, updated);
                 showSuccessNotification('Jadwal bulan ini telah dikosongkan.');
             };
 
