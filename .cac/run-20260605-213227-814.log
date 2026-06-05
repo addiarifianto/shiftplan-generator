@@ -1,0 +1,3 @@
+time=2026-06-05T14:32:27.814Z
+Error: git -C E:\Projects\shiftplan-generator push origin main failed: error: src refspec main does not match any
+error: failed to push some refs to 'https://github.com/addiarifianto/shiftplan-generator.git'
