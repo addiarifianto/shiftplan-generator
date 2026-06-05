@@ -44,7 +44,7 @@
     "enabled": true,
     "provider": "github",
     "remote": "origin",
-    "branch": "main"
+    "branch": "master"
   },
   "filters": {
     "include": [],
