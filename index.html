@@ -200,13 +200,13 @@
                 localStorage.setItem('gs_all_schedules', JSON.stringify(allSchedules));
             }, [allSchedules]);
 
-            // Listen Firebase auth state changes
+            // Listen Firebase auth state changes - shared workspace
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
                     if (firebaseUser) {
                         setUser(firebaseUser);
                         try {
-                            const docRef = db.collection('shiftplan').doc(firebaseUser.uid);
+                            const docRef = db.collection('global').doc('data');
                             const docSnap = await docRef.get();
                             if (docSnap.exists) {
                                 const data = docSnap.data();
@@ -226,17 +226,17 @@
                 return unsubscribe;
             }, []);
 
-            // Debounced sync to Firestore
+            // Debounced sync to shared Firestore doc
             useEffect(() => {
                 if (!user || !firestoreReady) return;
                 if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
                 syncTimerRef.current = setTimeout(async () => {
                     try {
-                        await db.collection('shiftplan').doc(user.uid).set({
+                        await db.collection('global').doc('data').set({
                             employees: employees,
                             allSchedules: allSchedules,
                             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        }, { merge: true });
+                        });
                     } catch (e) {
                         console.error('Firestore sync error:', e);
                     }
@@ -677,30 +677,36 @@
                                     </div>
                                 </div>
                                 <div className="flex items-center space-x-3">
-                                    {authLoading ? (
-                                        <div className="w-5 h-5 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
-                                    ) : user ? (
-                                        <div className="flex items-center space-x-2">
-                                            <img
-                                                src={user.photoURL}
-                                                alt=""
-                                                className="w-7 h-7 rounded-full ring-2 ring-brand-200"
-                                                referrerPolicy="no-referrer"
-                                            />
-                                            <div className="hidden sm:block text-xs">
-                                                <p className="font-medium text-slate-700 leading-tight">{user.displayName}</p>
-                                                <button onClick={handleLogout} className="text-red-500 hover:text-red-700 text-xs">Logout</button>
-                                            </div>
+                                    <div className="flex items-center space-x-2">
+                                        <div className="hidden sm:flex items-center space-x-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 py-1 px-2.5 rounded-lg">
+                                            <Icon name="Users" className="w-3.5 h-3.5" />
+                                            <span>Shared</span>
                                         </div>
-                                    ) : (
-                                        <button
-                                            onClick={handleLogin}
-                                            className="flex items-center space-x-1.5 text-xs font-medium text-slate-600 hover:text-brand-600 bg-slate-100 hover:bg-brand-50 py-1.5 px-3 rounded-lg transition-colors"
-                                        >
-                                            <Icon name="LogIn" className="w-4 h-4" />
-                                            <span className="hidden sm:inline">Login</span>
-                                        </button>
-                                    )}
+                                        {authLoading ? (
+                                            <div className="w-5 h-5 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+                                        ) : user ? (
+                                            <div className="flex items-center space-x-2">
+                                                <img
+                                                    src={user.photoURL}
+                                                    alt=""
+                                                    className="w-7 h-7 rounded-full ring-2 ring-brand-200"
+                                                    referrerPolicy="no-referrer"
+                                                />
+                                                <div className="hidden sm:block text-xs">
+                                                    <p className="font-medium text-slate-700 leading-tight">{user.displayName}</p>
+                                                    <button onClick={handleLogout} className="text-red-500 hover:text-red-700 text-xs">Logout</button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <button
+                                                onClick={handleLogin}
+                                                className="flex items-center space-x-1.5 text-xs font-medium text-slate-600 hover:text-brand-600 bg-slate-100 hover:bg-brand-50 py-1.5 px-3 rounded-lg transition-colors"
+                                            >
+                                                <Icon name="LogIn" className="w-4 h-4" />
+                                                <span className="hidden sm:inline">Login</span>
+                                            </button>
+                                        )}
+                                    </div>
                                     <div className="flex items-center space-x-2 text-sm text-slate-500 bg-slate-100 py-1.5 px-3 rounded-lg font-medium">
                                         <Icon name="Clock" className="w-4 h-4 text-brand-600" />
                                         <span>Tahun {selectedYear} - {getMonthName(selectedMonth)}</span>
