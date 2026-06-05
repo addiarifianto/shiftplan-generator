@@ -413,9 +413,11 @@
                             dailyPool.sort((a, b) => {
                                 const aReq = currentRequests[a.id]?.[d] === 'S2' ? -10 : 0;
                                 const bReq = currentRequests[b.id]?.[d] === 'S2' ? -10 : 0;
+                                const aNextS1 = currentRequests[a.id]?.[d + 1] === 'S1' ? 10 : 0;
+                                const bNextS1 = currentRequests[b.id]?.[d + 1] === 'S1' ? 10 : 0;
                                 let aPref = a.prefShift === 'S2' || a.prefShift === 'BOTH' ? -2 : 0;
                                 let bPref = b.prefShift === 'S2' || b.prefShift === 'BOTH' ? -2 : 0;
-                                return (workDaysCount[a.id] + aPref + aReq) - (workDaysCount[b.id] + bPref + bReq);
+                                return (workDaysCount[a.id] + aPref + aReq + aNextS1) - (workDaysCount[b.id] + bPref + bReq + bNextS1);
                             });
 
                             for (let i = 0; i < dailyPool.length; i++) {
@@ -425,6 +427,10 @@
 
                                 const maxAllowed = emp.maxConsecutive || 5;
                                 if (consecutiveDays[emp.id] >= maxAllowed) continue;
+
+                                // Cegah S2 jika besok request S1 (konflik malam→pagi)
+                                const nextReq = currentRequests[emp.id]?.[d + 1];
+                                if (nextReq === 'S1') continue;
 
                                 newMonthlySchedule[emp.id][d] = 'S2';
                                 assignedToday.add(emp.id);
