@@ -1,0 +1,7 @@
+time=2026-06-05T14:37:55.135Z
+Committed: 1
+- c9f57ffa1e13 chore: update 2 files
+Pushed: yes
+
+Warning: AI commit message failed — API key not found — env var "MINIMAX_API_KEY" is not set. Run: export MINIMAX_API_KEY='your-key'
+Using fallback prefix instead. Run "cac ai hello" to test your AI config.
