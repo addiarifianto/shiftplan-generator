@@ -304,6 +304,371 @@
                 ][monthIndex];
             };
 
+            // Fase 3: perata hari kerja/libur — memindahkan 1 hari kerja dari
+            // karyawan bertotal tinggi ke bertotal rendah tanpa melanggar constraint.
+            const repairBalancedOff = (sched, days, requests) => {
+                const work = {};
+                const isPagiS = (s) => s === 'S1' || s === 'S1_FRI_SHORT' || s === 'S1_FRI_FULL';
+                employees.forEach(e => {
+                    work[e.id] = 0;
+                    for (let d = 1; d <= days; d++) {
+                        const s = sched[e.id][d];
+                        if (s && s !== 'OFF') work[e.id]++;
+                    }
+                });
+                const workAt = (id, d) => { const s = sched[id][d]; return s && s !== 'OFF'; };
+                const streakEnd = (id, d) => { let c = 0; for (let k = d; k >= 1; k--) { if (workAt(id, k)) c++; else break; } return c; };
+                const streakStart = (id, d) => { let c = 0; for (let k = d; k <= days; k++) { if (workAt(id, k)) c++; else break; } return c; };
+                const eligible = (id, d, sh) => {
+                    const emp = employees.find(x => x.id === id);
+                    const mx = emp.maxConsecutive || 5;
+                    if (isPagiS(sh)) {
+                        if (sched[id][d - 1] === 'S2') return false;
+                        if (emp.prefShift === 'S2') return false;
+                        if (streakEnd(id, d - 1) + 1 + streakStart(id, d + 1) > mx) return false;
+                    } else {
+                        if (emp.prefShift === 'S1') return false;
+                        if (isPagiS(sched[id][d + 1])) return false;
+                        if (streakEnd(id, d - 1) + 1 + streakStart(id, d + 1) > mx) return false;
+                    }
+                    return true;
+                };
+
+                let improved = true;
+                let guard = 0;
+                while (improved && guard++ < 500) {
+                    improved = false;
+                    const donors = [...employees].sort((a, b) => work[b.id] - work[a.id]);
+                    for (const di of donors) {
+                        if (improved) break;
+                        for (const ri of [...donors].reverse()) {
+                            if (improved) break;
+                            if (di.id === ri.id) continue;
+                            if (work[di.id] - work[ri.id] <= 1) continue;
+                            for (let d = 1; d <= days; d++) {
+                                const sh = sched[di.id][d];
+                                if (!sh || sh === 'OFF') continue;
+                                if (requests && (requests[di.id]?.[d] || requests[ri.id]?.[d])) continue;
+                                if (workAt(ri.id, d)) continue;
+                                if (!eligible(ri.id, d, sh)) continue;
+                                // Pengaman "tanpa 2 libur beruntun": donor akan OFF di hari d,
+                                // tolak bila membuat 2 hari OFF beruntun bagi donor.
+                                if (sched[di.id][d - 1] === 'OFF' || sched[di.id][d + 1] === 'OFF') continue;
+                                sched[ri.id][d] = sh;
+                                sched[di.id][d] = 'OFF';
+                                work[ri.id]++;
+                                work[di.id]--;
+                                improved = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            };
+
+            // Fase 5: jaminan cakupan harian — pindahkan 1 hari kerja sejenis (pagi/malam)
+            // dari hari lain ke hari yang masih kekurangan personil, tanpa melanggar constraint.
+            // Hanya diambil dari hari yang tetap surplus, sehingga cakupan hari lain tidak menurun.
+            const coverShortages = (sched, days, requests, year, month) => {
+                const isPagiS = (s) => s === 'S1' || s === 'S1_FRI_SHORT' || s === 'S1_FRI_FULL';
+                const targetAt = (d) => {
+                    const dow = new Date(year, month, d).getDay();
+                    return { tm: (dow === 0 || dow === 6) ? 1 : 2, tn: 2 };
+                };
+                const countAt = (d) => {
+                    let mc = 0, nc = 0;
+                    employees.forEach(e => {
+                        const sh = sched[e.id]?.[d];
+                        if (isPagiS(sh)) mc++;
+                        else if (sh === 'S2') nc++;
+                    });
+                    return { mc, nc };
+                };
+                const workAt = (id, d) => { const s = sched[id]?.[d]; return s && s !== 'OFF'; };
+                const streakEnd = (id, d) => { let c = 0; for (let k = d; k >= 1; k--) { if (workAt(id, k)) c++; else break; } return c; };
+                const streakStart = (id, d) => { let c = 0; for (let k = d; k <= days; k++) { if (workAt(id, k)) c++; else break; } return c; };
+
+                const placeBlk = (id, d, sh) => {
+                    const emp = employees.find((x) => x.id === id);
+                    if (!emp) return 'empNotFound';
+                    const mx = emp.maxConsecutive || 5;
+                    if (streakEnd(id, d - 1) + 1 + streakStart(id, d + 1) > mx) return 'maxConsecutive';
+                    if (isPagiS(sh)) {
+                        if (sched[id]?.[d - 1] === 'S2') return 'malamSebelum';
+                        if (emp.prefShift === 'S2') return 'prefMalam';
+                    } else {
+                        if (emp.prefShift === 'S1') return 'prefPagi';
+                        if (isPagiS(sched[id]?.[d + 1])) return 'pagiSesudah';
+                    }
+                    return null;
+                };
+
+                const tryMove = () => {
+                    for (let d = 1; d <= days; d++) {
+                        const { tm, tn } = targetAt(d);
+                        const c = countAt(d);
+                        const needM = Math.max(0, tm - c.mc);
+                        const needN = Math.max(0, tn - c.nc);
+                        if (!needM && !needN) continue;
+                        for (const emp of employees) {
+                            if (requests && requests[emp.id]?.[d]) continue;
+                            if (workAt(emp.id, d)) continue;
+                            const moveTo = (src, dstSh) => { sched[emp.id][d] = dstSh; sched[emp.id][src] = 'OFF'; };
+                            // (a) penempatan langsung ke slot yang kurang
+                            for (const sh of (needM && needN ? ['S1', 'S2'] : [needM ? 'S1' : 'S2'])) {
+                                if (!placeBlk(emp.id, d, sh)) { sched[emp.id][d] = sh; return true; }
+                            }
+                            // (c) tukar silang: sesama hari d, istirahatkan shift jenis lain agar jenis kurang terisi
+                            if (needM) {
+                                for (let s = 1; s <= days; s++) {
+                                    if (s === d || sched[emp.id]?.[s] !== 'S2') continue;
+                                    if (countAt(s).nc - 1 < targetAt(s).tn) continue;
+                                    if (requests && requests[emp.id]?.[s]) continue;
+                                    if (placeBlk(emp.id, d, 'S1')) continue;
+                                    moveTo(s, 'S1'); return true;
+                                }
+                            }
+                            if (needN) {
+                                for (let s = 1; s <= days; s++) {
+                                    if (s === d || !isPagiS(sched[emp.id]?.[s])) continue;
+                                    if (countAt(s).mc - 1 < targetAt(s).tm) continue;
+                                    if (requests && requests[emp.id]?.[s]) continue;
+                                    if (placeBlk(emp.id, d, 'S2')) continue;
+                                    moveTo(s, 'S2'); return true;
+                                }
+                            }
+                            // (b) donor sejenis dari hari surplus
+                            if (needM) {
+                                for (let s = 1; s <= days; s++) {
+                                    if (s === d || !isPagiS(sched[emp.id]?.[s])) continue;
+                                    if (countAt(s).mc - 1 < targetAt(s).tm) continue;
+                                    if (requests && requests[emp.id]?.[s]) continue;
+                                    if (placeBlk(emp.id, d, 'S1')) continue;
+                                    moveTo(s, 'S1'); return true;
+                                }
+                            }
+                            if (needN) {
+                                for (let s = 1; s <= days; s++) {
+                                    if (s === d || sched[emp.id]?.[s] !== 'S2') continue;
+                                    if (countAt(s).nc - 1 < targetAt(s).tn) continue;
+                                    if (requests && requests[emp.id]?.[s]) continue;
+                                    if (placeBlk(emp.id, d, 'S2')) continue;
+                                    moveTo(s, 'S2'); return true;
+                                }
+                            }
+                            // (e) lepas hari terawal dari peruntukan beruntun terakhir, biarkan iterasi berikutnya menutupnya
+                            if (needM) {
+                                const run = [];
+                                for (let k = d - 1; k >= 1; k--) { if (workAt(emp.id, k)) run.push(k); else break; }
+                                for (let i = 0; i < run.length && i < (emp.maxConsecutive || 5); i++) {
+                                    const w = run[i];
+                                    if (requests && requests[emp.id]?.[w]) continue;
+                                    if (isPagiS(sched[emp.id][w])) {
+                                        if (countAt(w).mc - 1 < targetAt(w).tm) continue;
+                                        sched[emp.id][d] = 'S1'; sched[emp.id][w] = 'OFF'; return true;
+                                    }
+                                }
+                            }
+                            if (needN) {
+                                const run = [];
+                                for (let k = d - 1; k >= 1; k--) { if (workAt(emp.id, k)) run.push(k); else break; }
+                                for (let i = 0; i < run.length && i < (emp.maxConsecutive || 5); i++) {
+                                    const w = run[i];
+                                    if (requests && requests[emp.id]?.[w]) continue;
+                                    if (sched[emp.id][w] === 'S2') {
+                                        if (countAt(w).nc - 1 < targetAt(w).tn) continue;
+                                        sched[emp.id][d] = 'S2'; sched[emp.id][w] = 'OFF'; return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                };
+
+                let guard = 0;
+                while (tryMove() && guard++ < 500) {}
+            };
+
+            // === Penyelesai Eksak Bulan Penuh (Exact Cover, bias-seimbang) ===
+            // Jika masih ada hari bercakupan kurang setelah semua perbaikan lokal, seluruh bulan
+            // disusun ulang secara legal (request/preferensi dihormati). Bila terbukti mustahil,
+            // jadwal dikembalikan seperti semula & gap dilaporkan jujur — tanpa pelonggaran manual.
+            const fullSolveExact = (sched, days, requests, year, month) => {
+                const isPagiF = (sh) => sh === 'S1' || sh === 'S1_FRI_SHORT' || sh === 'S1_FRI_FULL';
+                const targetAt = (y, mo, d) => {
+                    const dow = new Date(y, mo, d).getDay();
+                    return { tm: (dow === 0 || dow === 6) ? 1 : 2, tn: 2 };
+                };
+                const workAt = (id, d) => sched[id]?.[d] && sched[id][d] !== 'OFF';
+                const streakEnd = (id, d) => { let c = 0; for (let k = d; k >= 1; k--) { if (workAt(id, k)) c++; else break; } return c; };
+                const streakStart = (id, d) => { let c = 0; for (let k = d; k <= days; k++) { if (workAt(id, k)) c++; else break; } return c; };
+                employees.forEach(e => { if (!sched[e.id]) sched[e.id] = {}; for (let d = 1; d <= days; d++) if (!sched[e.id][d]) sched[e.id][d] = 'OFF'; });
+                const blockOfFull = (emp, d, sh) => {
+                    const mx = emp.maxConsecutive || 5;
+                    if (isPagiF(sh)) {
+                        if (sched[emp.id]?.[d - 1] === 'S2') return 'malamSebelum';
+                        if (emp.prefShift === 'S2') return 'prefS2';
+                        if (streakEnd(emp.id, d - 1) + 1 + streakStart(emp.id, d + 1) > mx) return 'maxConsecutive';
+                    } else {
+                        if (emp.prefShift === 'S1') return 'prefS1';
+                        if (isPagiF(sched[emp.id]?.[d + 1])) return 'pagiSesudah';
+                        if (streakEnd(emp.id, d - 1) + 1 + streakStart(emp.id, d + 1) > mx) return 'maxConsecutive';
+                    }
+                    return null;
+                };
+                const comboPart = (dd) => {
+                    const { tm, tn } = targetAt(year, month, dd);
+                    const can = [];
+                    const pm1 = (emm, d) => { if (sched[emm.id]?.[d - 1] === 'S2') return false; if (emm.prefShift === 'S2') return false; return (streakEnd(emm.id, d - 1) + 1 <= (emm.maxConsecutive || 5)); };
+                    const pm2 = (emm, d) => { if (emm.prefShift === 'S1') return false; return (streakEnd(emm.id, d - 1) + 1 <= (emm.maxConsecutive || 5)); };
+                    employees.forEach((e) => {
+                        const req = requests && requests[e.id] && requests[e.id][dd];
+                        if (req === 'OFF') return;
+                        if (req === 'S1') { can.push({ id: e.id, S1ok: pm1(e, dd), S2ok: false }); return; }
+                        if (req === 'S2') { can.push({ id: e.id, S1ok: false, S2ok: pm2(e, dd) }); return; }
+                        can.push({ id: e.id, S1ok: pm1(e, dd), S2ok: pm2(e, dd) });
+                    });
+                    if (can.length < tm + tn) return [];
+                    // Aturan "tanpa 2 libur beruntun": siapa pun yang libur kemarin WAJIB dinas hari
+                    // ini — kecuali meminta libur hari ini sendiri (liburan yang diminta tetap dihormati).
+                    const must = [];
+                    employees.forEach(e => {
+                        const req = requests && requests[e.id] && requests[e.id][dd];
+                        if (req === 'OFF') return;
+                        if (dd > 1 && sched[e.id]?.[dd - 1] === 'OFF') must.push(e.id);
+                    });
+                    const out = [];
+                    const rec2 = (j, pi, ni) => {
+                        if (pi.length === tm && ni.length === tn) { const w = pi.slice().concat(ni.slice()); if (must.every(id => w.includes(id))) out.push(w); return; }
+                        if (pi.length + ni.length >= can.length || pi.length + ni.length > tm + tn) return;
+                        for (let i = j; i < can.length; i++) {
+                            const c = can[i];
+                            if (pi.length < tm && c.S1ok) { pi.push(c.id); rec2(i + 1, pi, ni); pi.pop(); }
+                            if (ni.length < tn && c.S2ok) { ni.push(c.id); rec2(i + 1, pi, ni); ni.pop(); }
+                        }
+                    };
+                    rec2(0, [], []);
+                    return out;
+                };
+                const verifyDay = (dd) => {
+                    const { tm, tn } = targetAt(year, month, dd);
+                    let mc = 0, nc = 0;
+                    for (const e of employees) {
+                        const sh = sched[e.id]?.[dd];
+                        if (isPagiF(sh)) { if (blockOfFull(e, dd, sh)) return false; mc++; }
+                        else if (sh === 'S2') { if (blockOfFull(e, dd, sh)) return false; nc++; }
+                    }
+                    return mc >= tm && nc >= tn;
+                };
+                let nodes = 0;
+                let exhausted = false;
+                const orig = {};
+                employees.forEach(e => { orig[e.id] = {}; for (let d = 1; d <= days; d++) orig[e.id][d] = sched[e.id][d]; });
+                const pmc = {};
+                employees.forEach(e => pmc[e.id] = { p: 0, n: 0 });
+                const empById = {};
+                employees.forEach(e => empById[e.id] = e);
+                const nodeBudget = 8000000;
+                const rec = (dd) => {
+                    if (++nodes > nodeBudget) { exhausted = true; return false; }
+                    if (dd > days) return true;
+                    const cs = comboPart(dd);
+                    const old = {};
+                    employees.forEach(e => old[e.id] = sched[e.id][dd]);
+                    const { tm } = targetAt(year, month, dd);
+                    // Urutkan combo dengan tujuan yang SAMA dengan greedy (total hari kerja,
+                    // balance pagi/malam, preferensi, request) agar hasil eksak tidak meratakan
+                    // malam merata ke semua orang — menarik pegawai bertotal-rendah (mis. khusus
+                    // malam) lebih dulu, self-limiting saat totalnya mendekati rata-rata.
+                    cs.sort((a, b) => {
+                        const costOf = (combo) => {
+                            let s = 0;
+                            for (let i = 0; i < combo.length; i++) {
+                                const addP = i < tm;
+                                const id = combo[i];
+                                const emp = empById[id];
+                                const prev = pmc[id];
+                                const tp = prev.p + (addP ? 1 : 0);
+                                const tn = prev.n + (addP ? 0 : 1);
+                                const bal = emp.prefShift === 'BOTH' ? 2 * (addP ? (tp - tn) : (tn - tp)) : 0;
+                                const prq = requests && requests[id] && requests[id][dd];
+                                const aReq = !prq ? 0 : (addP ? (prq === 'S1' ? -10 : 0) : (prq === 'S2' ? -10 : 0));
+                                const aNextS1 = (!addP && requests && requests[id] && requests[id][dd + 1] === 'S1') ? 10 : 0;
+                                const aPref = addP ? (emp.prefShift === 'S1' || emp.prefShift === 'BOTH' ? -2 : 0) : (emp.prefShift === 'S2' || emp.prefShift === 'BOTH' ? -2 : 0);
+                                const aPrevOff = dd > 1 && sched[id] && sched[id][dd - 1] === 'OFF' ? -3 : 0;
+                                s += (tp + tn) + bal + aPref + aReq + aNextS1 + aPrevOff;
+                            }
+                            return s;
+                        };
+                        return costOf(a) - costOf(b);
+                    });
+                    for (const combo of cs) {
+                        employees.forEach(e => sched[e.id][dd] = 'OFF');
+                        for (let i = 0; i < combo.length; i++) { const addP = i < tm; sched[combo[i]][dd] = addP ? 'S1' : 'S2'; pmc[combo[i]][addP ? 'p' : 'n']++; }
+                        if (rec(dd + 1) && verifyDay(dd)) return true;
+                        for (let i = 0; i < combo.length; i++) { const addP = i < tm; pmc[combo[i]][addP ? 'p' : 'n']--; }
+                        employees.forEach(e => sched[e.id][dd] = old[e.id]);
+                    }
+                    return false;
+                };
+                const ok = rec(1);
+                if (!ok) employees.forEach(e => { sched[e.id] = {}; for (let d = 1; d <= days; d++) sched[e.id][d] = orig[e.id][d]; });
+                return ok;
+            };
+
+            // Penyeimbang akhir: tukar pagi<->malam antar dua personil BOTH di hari yang sama
+            // bila legal & memperkecil selisih |pagi - malam| masing-masing (cakupan tetap penuh).
+            const rebalancePM = (sched, days, requests) => {
+                const isPagiR = (sh) => sh === 'S1' || sh === 'S1_FRI_SHORT' || sh === 'S1_FRI_FULL';
+                const workAt = (id, d) => sched[id]?.[d] && sched[id][d] !== 'OFF';
+                const streakEnd = (id, d) => { let c = 0; for (let k = d; k >= 1; k--) { if (workAt(id, k)) c++; else break; } return c; };
+                const streakStart = (id, d) => { let c = 0; for (let k = d; k <= days; k++) { if (workAt(id, k)) c++; else break; } return c; };
+                const reqAt = (id, d) => !!(requests && requests[id] && requests[id][d]);
+                const blockOf = (emp, d, sh) => {
+                    const mx = emp.maxConsecutive || 5;
+                    if (isPagiR(sh)) {
+                        if (sched[emp.id]?.[d - 1] === 'S2') return 'malamSebelum';
+                        if (emp.prefShift === 'S2') return 'prefS2';
+                        if (streakEnd(emp.id, d - 1) + 1 + streakStart(emp.id, d + 1) > mx) return 'maxConsecutive';
+                    } else {
+                        if (emp.prefShift === 'S1') return 'prefS1';
+                        if (isPagiR(sched[emp.id]?.[d + 1])) return 'pagiSesudah';
+                        if (streakEnd(emp.id, d - 1) + 1 + streakStart(emp.id, d + 1) > mx) return 'maxConsecutive';
+                    }
+                    return null;
+                };
+                const pm = (id) => { let p = 0, n = 0; for (let d = 1; d <= days; d++) { const s = sched[id][d]; if (isPagiR(s)) p++; else if (s === 'S2') n++; } return { p, n }; };
+                let guard = 0;
+                while (guard++ < 1000) {
+                    let improved = false;
+                    const B = employees.filter(e => e.prefShift === 'BOTH');
+                    for (const A of B) {
+                        if (improved) break;
+                        for (const C of B) {
+                            if (improved || A === C) continue;
+                            const a = pm(A.id), c = pm(C.id);
+                            const cur = Math.abs(a.p - a.n) + Math.abs(c.p - c.n);
+                            for (let d = 1; d <= days && !improved; d++) {
+                                const sa = sched[A.id]?.[d], sc = sched[C.id]?.[d];
+                                const isAp = isPagiR(sa), isCn = (sc === 'S2');
+                                if (!(isAp && isCn)) continue;
+                                if (reqAt(A.id, d) && requests[A.id][d] === 'S1') continue;
+                                if (reqAt(C.id, d) && requests[C.id][d] === 'S2') continue;
+                                if (blockOf(A, d, 'S2')) continue;
+                                if (blockOf(C, d, 'S1')) continue;
+                                const a2 = { p: a.p - 1, n: a.n + 1 }, c2 = { p: c.p + 1, n: c.n - 1 };
+                                const nxt = Math.abs(a2.p - a2.n) + Math.abs(c2.p - c2.n);
+                                if (nxt >= cur) continue;
+                                sched[A.id][d] = 'S2'; sched[C.id][d] = 'S1';
+                                improved = true;
+                            }
+                        }
+                    }
+                    if (!improved) break;
+                }
+            };
+
             const generateSchedule = () => {
                 if (employees.length === 0) {
                     setErrorMsg('Silakan tambahkan karyawan terlebih dahulu.');
@@ -319,16 +684,111 @@
                         employees.forEach(emp => { newMonthlySchedule[emp.id] = {}; });
 
                         const workDaysCount = {};
+                        const s1Prior = {};
+                        const s2Prior = {};
+                        const s1Cur = {};
+                        const s2Cur = {};
                         const consecutiveDays = {};
                         const lastShift = {};
 
-                        employees.forEach(emp => {
-                            workDaysCount[emp.id] = 0;
-                            consecutiveDays[emp.id] = 0;
-                            lastShift[emp.id] = null;
+                        // Key bulan sebelumnya untuk riwayat (pembagian adil lintas bulan)
+                        let prevMonth = selectedMonth === 0 ? 11 : selectedMonth - 1;
+                        let prevYear = selectedMonth === 0 ? selectedYear - 1 : selectedYear;
+                        let prevKey = `${prevYear}_${prevMonth}`;
+                        let prevSchedule = allSchedules[prevKey] || {};
+                        let prevDaysCount = new Date(prevYear, prevMonth + 1, 0).getDate();
+
+                        // Fallback: jika arsip bulan sebelumnya tidak ada, pakai arsip terakhir yang tersedia
+                        if (Object.keys(prevSchedule).length === 0) {
+                            const curIdx = selectedYear * 12 + selectedMonth;
+                            const candidates = Object.keys(allSchedules)
+                                .filter(k => /^\d{4}_\d{1,2}$/.test(k))
+                                .map(k => {
+                                    const [yy, mm] = k.split('_').map(Number);
+                                    const idx = yy * 12 + mm;
+                                    return { k, idx };
+                                })
+                                .filter(c => c.idx < curIdx && Object.keys(allSchedules[c.k] || {}).length > 0)
+                                .sort((a, b) => b.idx - a.idx);
+                            if (candidates.length > 0 && candidates[0].k !== prevKey) {
+                                prevKey = candidates[0].k;
+                                prevSchedule = allSchedules[prevKey] || {};
+                                const [yy, mm] = prevKey.split('_').map(Number);
+                                prevYear = yy;
+                                prevMonth = mm;
+                                prevDaysCount = new Date(prevYear, prevMonth + 1, 0).getDate();
+                            }
+                        }
+
+                        // Fase 4: memory rekan shift — pasangan yang sering bareng diberi penalti
+                        // agar rekan 1 shift berganti-ganti (berputar) tanpa mengganggu keseimbangan.
+                        const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+                        const pairCounts = {};
+                        const bumpPair = (a, b) => {
+                            if (!a || !b || a === b) return;
+                            const k = pairKey(a, b);
+                            pairCounts[k] = (pairCounts[k] || 0) + 1;
+                        };
+                        const isPagiShift = (s) => s === 'S1' || s === 'S1_FRI_SHORT' || s === 'S1_FRI_FULL';
+
+                        // Seed dari seluruh arsip bulan SEBELUM bulan aktif (riwayat kebersamaan lintas bulan)
+                        Object.keys(allSchedules).forEach(k => {
+                            if (!/^\d{4}_\d{1,2}$/.test(k)) return;
+                            const [yy, mm] = k.split('_').map(Number);
+                            if (yy * 12 + mm >= selectedYear * 12 + selectedMonth) return;
+                            const old = allSchedules[k] || {};
+                            if (Object.keys(old).length === 0) return;
+                            const od = new Date(yy, mm + 1, 0).getDate();
+                            for (let pd = 1; pd <= od; pd++) {
+                                const pagiIds = [];
+                                const malamIds = [];
+                                employees.forEach(e => {
+                                    const sh = old[e.id]?.[pd];
+                                    if (isPagiShift(sh)) pagiIds.push(e.id);
+                                    else if (sh === 'S2') malamIds.push(e.id);
+                                });
+                                [pagiIds, malamIds].forEach(grp => {
+                                    for (let x = 0; x < grp.length; x++) {
+                                        for (let y = x + 1; y < grp.length; y++) bumpPair(grp[x], grp[y]);
+                                    }
+                                });
+                            }
                         });
 
-                        for (let d = 1; d <= daysInMonth; d++) {
+                        employees.forEach(emp => {
+                            workDaysCount[emp.id] = 0;
+
+                            let prevS1 = 0;
+                            let prevS2 = 0;
+                            let trailing = 0;
+                            let lastSh = null;
+                            const prevEmpSched = prevSchedule[emp.id];
+
+                            if (prevEmpSched) {
+                                for (let pd = 1; pd <= prevDaysCount; pd++) {
+                                    const sh = prevEmpSched[pd];
+                                    if (sh === 'S1' || sh === 'S1_FRI_SHORT' || sh === 'S1_FRI_FULL') prevS1++;
+                                    else if (sh === 'S2') prevS2++;
+                                }
+                                lastSh = prevEmpSched[prevDaysCount] || null;
+                                if (lastSh && lastSh !== 'OFF') {
+                                    for (let pd = prevDaysCount; pd >= 1; pd--) {
+                                        const sh = prevEmpSched[pd];
+                                        if (sh && sh !== 'OFF') trailing++;
+                                        else break;
+                                    }
+                                }
+                            }
+
+                            s1Prior[emp.id] = prevS1;
+                            s2Prior[emp.id] = prevS2;
+                            s1Cur[emp.id] = 0;
+                            s2Cur[emp.id] = 0;
+                            consecutiveDays[emp.id] = trailing;
+                            lastShift[emp.id] = lastSh;
+                        });
+
+for (let d = 1; d <= daysInMonth; d++) {
                             const date = new Date(selectedYear, selectedMonth, d);
                             const dayOfWeek = date.getDay();
                             const isFriday = dayOfWeek === 5;
@@ -348,97 +808,78 @@
                                 }
                             });
 
-                            // 1. Aturan Shift Pagi (Sore/Malam/Akhir Pekan/Jumat)
+                            // 1. Aturan Shift Pagi & 2. Shift Malam (2 personil/shift, pasangan berputar)
                             let morningQuota = isWeekend ? 1 : 2;
                             let assignedMorning = 0;
+                            let assignedNight = 0;
+
+                            // Fase 4: pilih personil dua-tahap — slot pertama (skor prior+balance terendah),
+                            // slot kedua/rekan = skor + penalti riwayat kebersamaan agar pasangan berputar.
+                            const tryAssignShift = (shiftId, quota) => {
+                                const isPagi = isPagiShift(shiftId);
+                                let assigned = 0;
+                                while (assigned < quota) {
+                                    let partnerId = null;
+                                    employees.forEach(e => {
+                                        if (partnerId || !assignedToday.has(e.id)) return;
+                                        const es = newMonthlySchedule[e.id]?.[d];
+                                        if (isPagi ? isPagiShift(es) : es === 'S2') partnerId = e.id;
+                                    });
+                                    let best = null;
+                                    let bestScore = Infinity;
+                                    dailyPool.forEach(emp => {
+                                        if (assignedToday.has(emp.id)) return;
+                                        if ((emp.maxConsecutive || 5) <= consecutiveDays[emp.id]) return;
+                                        if (isPagi) {
+                                            if (lastShift[emp.id] === 'S2') return;
+                                            if (emp.prefShift === 'S2' && currentRequests[emp.id]?.[d] !== 'S1') return;
+                                            if (currentRequests[emp.id]?.[d] === 'S2') return;
+                                        } else {
+                                            if (emp.prefShift === 'S1' && currentRequests[emp.id]?.[d] !== 'S2') return;
+                                            if (currentRequests[emp.id]?.[d + 1] === 'S1') return;
+                                            if (currentRequests[emp.id]?.[d] === 'S1') return;
+                                        }
+                                        let sc;
+                                        const aPrevOff = lastShift[emp.id] === 'OFF' ? -3 : 0;
+                                        const aTotal = (s1Prior[emp.id] + s1Cur[emp.id]) + (s2Prior[emp.id] + s2Cur[emp.id]);
+                                        if (isPagi) {
+                                            const aReq = currentRequests[emp.id]?.[d] === 'S1' ? -10 : 0;
+                                            const aPref = emp.prefShift === 'S1' || emp.prefShift === 'BOTH' ? -2 : 0;
+                                            const aBal = emp.prefShift === 'BOTH' ? 2 * (s1Cur[emp.id] - s2Cur[emp.id]) : 0;
+                                            sc = aTotal + aBal + aPref + aReq + aPrevOff;
+                                        } else {
+                                            const aReq = currentRequests[emp.id]?.[d] === 'S2' ? -10 : 0;
+                                            const aNextS1 = currentRequests[emp.id]?.[d + 1] === 'S1' ? 10 : 0;
+                                            const aPref = emp.prefShift === 'S2' || emp.prefShift === 'BOTH' ? -2 : 0;
+                                            const aBal = emp.prefShift === 'BOTH' ? 2 * (s2Cur[emp.id] - s1Cur[emp.id]) : 0;
+                                            sc = aTotal + aBal + aPref + aReq + aNextS1 + aPrevOff;
+                                        }
+                                        if (partnerId) sc += Math.min(pairCounts[pairKey(emp.id, partnerId)] || 0, 4);
+                                        if (sc < bestScore) { bestScore = sc; best = emp; }
+                                    });
+                                    if (!best) break;
+                                    newMonthlySchedule[best.id][d] = shiftId;
+                                    assignedToday.add(best.id);
+                                    workDaysCount[best.id]++;
+                                    if (isPagi) s1Cur[best.id]++; else s2Cur[best.id]++;
+                                    consecutiveDays[best.id]++;
+                                    lastShift[best.id] = shiftId;
+                                    if (partnerId) bumpPair(best.id, partnerId);
+                                    if (isPagi) assignedMorning++; else assignedNight++;
+                                    assigned++;
+                                }
+                            };
 
                             if (isFriday) {
                                 const fridayShifts = ['S1_FRI_SHORT', 'S1_FRI_FULL'];
-                                fridayShifts.forEach(fShiftId => {
-                                    dailyPool.sort((a, b) => {
-                                        const aReq = currentRequests[a.id]?.[d] === 'S1' ? -10 : 0;
-                                        const bReq = currentRequests[b.id]?.[d] === 'S1' ? -10 : 0;
-                                        let aPref = a.prefShift === 'S1' || a.prefShift === 'BOTH' ? -2 : 0;
-                                        let bPref = b.prefShift === 'S1' || b.prefShift === 'BOTH' ? -2 : 0;
-                                        return (workDaysCount[a.id] + aPref + aReq) - (workDaysCount[b.id] + bPref + bReq);
-                                    });
-
-                                    for (let i = 0; i < dailyPool.length; i++) {
-                                        const emp = dailyPool[i];
-                                        if (assignedToday.has(emp.id)) continue;
-
-                                        const maxAllowed = emp.maxConsecutive || 5;
-                                        if (consecutiveDays[emp.id] >= maxAllowed) continue;
-                                        if (lastShift[emp.id] === 'S2') continue;
-
-                                        newMonthlySchedule[emp.id][d] = fShiftId;
-                                        assignedToday.add(emp.id);
-                                        workDaysCount[emp.id]++;
-                                        consecutiveDays[emp.id]++;
-                                        lastShift[emp.id] = fShiftId;
-                                        break;
-                                    }
-                                });
+                                fridayShifts.forEach(fShiftId => { tryAssignShift(fShiftId, 1); });
                             } else {
-                                dailyPool.sort((a, b) => {
-                                    const aReq = currentRequests[a.id]?.[d] === 'S1' ? -10 : 0;
-                                    const bReq = currentRequests[b.id]?.[d] === 'S1' ? -10 : 0;
-                                    let aPref = a.prefShift === 'S1' || a.prefShift === 'BOTH' ? -2 : 0;
-                                    let bPref = b.prefShift === 'S1' || b.prefShift === 'BOTH' ? -2 : 0;
-                                    return (workDaysCount[a.id] + aPref + aReq) - (workDaysCount[b.id] + bPref + bReq);
-                                });
-
-                                for (let i = 0; i < dailyPool.length; i++) {
-                                    if (assignedMorning >= morningQuota) break;
-                                    const emp = dailyPool[i];
-                                    if (assignedToday.has(emp.id)) continue;
-
-                                    const maxAllowed = emp.maxConsecutive || 5;
-                                    if (consecutiveDays[emp.id] >= maxAllowed) continue;
-                                    if (lastShift[emp.id] === 'S2') continue;
-
-                                    newMonthlySchedule[emp.id][d] = 'S1';
-                                    assignedToday.add(emp.id);
-                                    workDaysCount[emp.id]++;
-                                    consecutiveDays[emp.id]++;
-                                    lastShift[emp.id] = 'S1';
-                                    assignedMorning++;
-                                }
+                                tryAssignShift('S1', Math.max(0, morningQuota));
                             }
 
                             // 2. Aturan Shift Malam (Tetap 2 Personil)
-                            let nightQuota = 2;
-                            let assignedNight = 0;
-
-                            dailyPool.sort((a, b) => {
-                                const aReq = currentRequests[a.id]?.[d] === 'S2' ? -10 : 0;
-                                const bReq = currentRequests[b.id]?.[d] === 'S2' ? -10 : 0;
-                                const aNextS1 = currentRequests[a.id]?.[d + 1] === 'S1' ? 10 : 0;
-                                const bNextS1 = currentRequests[b.id]?.[d + 1] === 'S1' ? 10 : 0;
-                                let aPref = a.prefShift === 'S2' || a.prefShift === 'BOTH' ? -2 : 0;
-                                let bPref = b.prefShift === 'S2' || b.prefShift === 'BOTH' ? -2 : 0;
-                                return (workDaysCount[a.id] + aPref + aReq + aNextS1) - (workDaysCount[b.id] + bPref + bReq + bNextS1);
-                            });
-
-                            for (let i = 0; i < dailyPool.length; i++) {
-                                if (assignedNight >= nightQuota) break;
-                                const emp = dailyPool[i];
-                                if (assignedToday.has(emp.id)) continue;
-
-                                const maxAllowed = emp.maxConsecutive || 5;
-                                if (consecutiveDays[emp.id] >= maxAllowed) continue;
-
-                                // Cegah S2 jika besok request S1 (konflik malam→pagi)
-                                const nextReq = currentRequests[emp.id]?.[d + 1];
-                                if (nextReq === 'S1') continue;
-
-                                newMonthlySchedule[emp.id][d] = 'S2';
-                                assignedToday.add(emp.id);
-                                workDaysCount[emp.id]++;
-                                consecutiveDays[emp.id]++;
-                                lastShift[emp.id] = 'S2';
-                                assignedNight++;
-                            }
+                            const nightQuota = 2;
+                            tryAssignShift('S2', Math.max(0, nightQuota));
 
                             // 3. Menugaskan Libur (L)
                             employees.forEach(emp => {
@@ -451,6 +892,64 @@
 
                             setGenerationProgress(Math.floor(10 + (d / daysInMonth) * 80));
                         }
+
+                        // Fase 5: tutup kekurangan cakupan harian (pagi/malam) — beberapa lintasan
+                        // cover (hanya perpindahan yang patuh aturan) diselingi perata akhir agar
+                        // setiap relokasi membuka relokasi sah berikutnya.
+                        for (let pass = 0; pass < 3; pass++) {
+                            coverShortages(newMonthlySchedule, daysInMonth, currentRequests, selectedYear, selectedMonth);
+                            repairBalancedOff(newMonthlySchedule, daysInMonth, currentRequests);
+                        }
+
+                        // Cek akhir: hari yang masih kurang personil (pagi/malam) setelah semua
+                        // perbaikan lokal. Bila masih ada, susun ulang bulan penuh secara eksak
+                        // (jaminan legal + cakupan 100%). Bila terbukti mustahil, jadwal dibiarkan
+                        // apa adanya dan gap dilaporkan jujur di panel — tidak ada pelonggaran manual.
+                        const isPagiG = (sh) => sh === 'S1' || sh === 'S1_FRI_SHORT' || sh === 'S1_FRI_FULL';
+                        const gapDays = [];
+                        for (let gd = 1; gd <= daysInMonth; gd++) {
+                            const gDow = new Date(selectedYear, selectedMonth, gd).getDay();
+                            const gT = { tm: (gDow === 0 || gDow === 6) ? 1 : 2, tn: 2 };
+                            let mc = 0, nc = 0;
+                            employees.forEach(e => {
+                                const sh = newMonthlySchedule[e.id]?.[gd];
+                                if (isPagiG(sh)) mc++;
+                                else if (sh === 'S2') nc++;
+                            });
+                            if (mc < gT.tm || nc < gT.tn) gapDays.push(gd);
+                        }
+                        // Aturan "tanpa 2 hari libur beruntun": cari klaster libur (panjang >= 2)
+                        // yang bukan murni permintaan libur user (liburan yang diminta tetap dihormati).
+                        const offRuns2 = [];
+                        employees.forEach(emp => {
+                            let runStart = 0;
+                            for (let gd = 1; gd <= daysInMonth; gd++) {
+                                const sh = newMonthlySchedule[emp.id]?.[gd];
+                                const isOff = !sh || sh === 'OFF';
+                                if (isOff) { if (!runStart) runStart = gd; }
+                                else {
+                                    if (runStart && gd - runStart >= 2) {
+                                        let anyReq = false;
+                                        for (let k = runStart; k < gd; k++) if (currentRequests[emp.id]?.[k] === 'OFF') { anyReq = true; break; }
+                                        if (!anyReq) offRuns2.push({ empId: emp.id, start: runStart, len: gd - runStart });
+                                    }
+                                    runStart = 0;
+                                }
+                            }
+                            if (runStart && daysInMonth - runStart + 1 >= 2) {
+                                let anyReq = false;
+                                for (let k = runStart; k <= daysInMonth; k++) if (currentRequests[emp.id]?.[k] === 'OFF') { anyReq = true; break; }
+                                if (!anyReq) offRuns2.push({ empId: emp.id, start: runStart, len: daysInMonth - runStart + 1 });
+                            }
+                        });
+                        if (gapDays.length || offRuns2.length) {
+                            fullSolveExact(newMonthlySchedule, daysInMonth, currentRequests, selectedYear, selectedMonth);
+                        }
+                        rebalancePM(newMonthlySchedule, daysInMonth, currentRequests);
+                        // Perata total hari kerja terakhir: hasil solver (bila dipicu) maupun
+                        // rebalancePM tidak meratakan jumlah libur/hari kerja antar pegawai
+                        // (terutama yang khusus malam), jadi jalankan sekali lagi di akhir.
+                        repairBalancedOff(newMonthlySchedule, daysInMonth, currentRequests);
 
                         setAllSchedules(prev => ({
                             ...prev,
@@ -466,8 +965,9 @@
 
                     } catch (err) {
                         setIsGenerating(false);
-                        setErrorMsg('Gagal menghasilkan jadwal secara otomatis.');
-                        console.error(err);
+                        const detail = err && err.message ? err.message : String(err);
+                        console.error('Generate gagal:', err);
+                        setErrorMsg('Gagal menghasilkan jadwal secara otomatis.' + (detail ? ` (${detail})` : ''));
                     }
                 }, 600);
             };
@@ -528,10 +1028,33 @@
                 let shortageDaysCount = 0;
                 let details = [];
 
+                const streakEnd = (empId, d) => { let c = 0; for (let k = d; k >= 1; k--) { const s = schedule[empId]?.[k]; if (s && s !== 'OFF') c++; else break; } return c; };
+                const streakStart = (empId, d) => { let c = 0; for (let k = d; k <= daysInMonth; k++) { const s = schedule[empId]?.[k]; if (s && s !== 'OFF') c++; else break; } return c; };
+                const isPagiS = (s) => s === 'S1' || s === 'S1_FRI_SHORT' || s === 'S1_FRI_FULL';
+
+                // Alasan spesifik mengapa kekurangan tidak dapat ditutup oleh personil yang
+                // sedang libur (dipakai saat hari benar-benar mustahil legal terpenuhi).
+                const blockedCauses = (d, needMorning, needNight) => {
+                    const causes = [];
+                    employees.forEach(emp => {
+                        const sh = schedule[emp.id]?.[d];
+                        if (sh && sh !== 'OFF') return;
+                        if (currentRequests && currentRequests[emp.id]?.[d]) return;
+                        const mx = emp.maxConsecutive || 5;
+                        const over = streakEnd(emp.id, d - 1) + 1 + streakStart(emp.id, d + 1) > mx;
+                        if (needMorning && emp.prefShift === 'S2') causes.push(`${emp.name} pref malam`);
+                        else if (needMorning && schedule[emp.id]?.[d - 1] === 'S2') causes.push(`${emp.name} malam sebelumnya`);
+                        else if (needMorning && over) causes.push(`${emp.name} maxConsecutive`);
+                        if (needNight && emp.prefShift === 'S1') causes.push(`${emp.name} pref pagi`);
+                        else if (needNight && isPagiS(schedule[emp.id]?.[d + 1])) causes.push(`${emp.name} besok pagi`);
+                        else if (needNight && over) causes.push(`${emp.name} maxConsecutive`);
+                    });
+                    return causes;
+                };
+
                 for (let d = 1; d <= daysInMonth; d++) {
                     const date = new Date(selectedYear, selectedMonth, d);
                     const dayOfWeek = date.getDay();
-                    const isFriday = dayOfWeek === 5;
                     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
                     // Hitung staf terdaftar untuk hari tersebut
@@ -540,7 +1063,7 @@
 
                     employees.forEach(emp => {
                         const shiftId = schedule[emp.id]?.[d];
-                        if (shiftId === 'S1' || shiftId === 'S1_FRI_SHORT' || shiftId === 'S1_FRI_FULL') {
+                        if (isPagiS(shiftId)) {
                             morningCount++;
                         }
                         if (shiftId === 'S2') {
@@ -553,15 +1076,57 @@
 
                     if (morningCount < targetMorning || nightCount < targetNight) {
                         shortageDaysCount++;
-                        details.push({
-                            day: d,
-                            reason: `Kekurangan: ${morningCount < targetMorning ? 'Pagi ' : ''}${nightCount < targetNight ? 'Malam' : ''}`
-                        });
+                        const needM = morningCount < targetMorning;
+                        const needN = nightCount < targetNight;
+                        const short = `Kekurangan: ${needM ? `Pagi (${morningCount}/${targetMorning})` : ''}${needM && needN ? ' & ' : ''}${needN ? `Malam (${nightCount}/${targetNight})` : ''}`;
+                        const causes = blockedCauses(d, needM, needN);
+                        const causeText = causes.length ? ` — tidak bisa ditutup oleh personil yang libur: ${causes.join(', ')}` : '';
+                        details.push({ day: d, reason: short + causeText });
                     }
                 }
 
-                return { shortageDaysCount, details };
-            }, [schedule, employees, daysInMonth, selectedMonth, selectedYear]);
+                let violations = [];
+                employees.forEach(emp => {
+                    let streak = 0;
+                    for (let d = 1; d <= daysInMonth; d++) {
+                        const sh = schedule[emp.id]?.[d];
+                        if (sh && sh !== 'OFF') {
+                            streak++;
+                            if (streak > (emp.maxConsecutive || 5)) violations.push(`d${d}/${emp.name}: kerja ${streak} hari berturut`);
+                            if (sh === 'S2' && isPagiS(schedule[emp.id]?.[d + 1])) violations.push(`d${d}/${emp.name}: malam langsung pagi`);
+                        } else {
+                            streak = 0;
+                        }
+                    }
+                });
+
+                // Klaster libur beruntun (>= 2 hari) di luar yang diminta user — bahan laporan
+                // jujur bila secara matematis tak bisa dihindari dengan jumlah personil saat ini.
+                let offRuns2 = [];
+                employees.forEach(emp => {
+                    let runStart = 0;
+                    for (let d = 1; d <= daysInMonth; d++) {
+                        const sh = schedule[emp.id]?.[d];
+                        const isOff = !sh || sh === 'OFF';
+                        if (isOff) { if (!runStart) runStart = d; }
+                        else {
+                            if (runStart && d - runStart >= 2) {
+                                let anyReq = false;
+                                for (let k = runStart; k < d; k++) if (currentRequests[emp.id]?.[k] === 'OFF') { anyReq = true; break; }
+                                if (!anyReq) offRuns2.push({ day: runStart, len: d - runStart, name: emp.name, empId: emp.id });
+                            }
+                            runStart = 0;
+                        }
+                    }
+                    if (runStart && daysInMonth - runStart + 1 >= 2) {
+                        let anyReq = false;
+                        for (let k = runStart; k <= daysInMonth; k++) if (currentRequests[emp.id]?.[k] === 'OFF') { anyReq = true; break; }
+                        if (!anyReq) offRuns2.push({ day: runStart, len: daysInMonth - runStart + 1, name: emp.name, empId: emp.id });
+                    }
+                });
+
+                return { shortageDaysCount, details, violations, offRuns2 };
+            }, [schedule, employees, daysInMonth, selectedMonth, selectedYear, currentRequests]);
 
             const getEmployeeStats = (empId) => {
                 const stats = { S1: 0, S2: 0, S1_FRI_SHORT: 0, S1_FRI_FULL: 0, OFF: 0 };
@@ -850,14 +1415,18 @@
                                 </div>
                             </div>
                             
-                            <div className={`p-5 rounded-2xl border shadow-sm flex items-center space-x-4 ${securityCoverage.shortageDaysCount > 0 ? 'bg-amber-50/50 border-amber-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
-                                <div className={`p-3 rounded-xl ${securityCoverage.shortageDaysCount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            <div className={`p-5 rounded-2xl border shadow-sm flex items-center space-x-4 ${securityCoverage.shortageDaysCount > 0 || securityCoverage.offRuns2.length > 0 ? 'bg-amber-50/50 border-amber-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
+                                <div className={`p-3 rounded-xl ${securityCoverage.shortageDaysCount > 0 || securityCoverage.offRuns2.length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
                                     <Icon name="ShieldCheck" className="w-6 h-6" />
                                 </div>
                                 <div>
                                     <p className="text-sm text-slate-600 font-medium">Status Pengamanan Pos</p>
-                                    <p className={`text-xl font-bold ${securityCoverage.shortageDaysCount > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
-                                        {securityCoverage.shortageDaysCount > 0 ? `Kekurangan ${securityCoverage.shortageDaysCount} Hari` : '100% Aman / Terpenuhi'}
+                                    <p className={`text-xl font-bold ${securityCoverage.shortageDaysCount > 0 || securityCoverage.offRuns2.length > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
+                                        {securityCoverage.shortageDaysCount > 0
+                                            ? `Kekurangan ${securityCoverage.shortageDaysCount} Hari`
+                                            : (securityCoverage.offRuns2.length > 0
+                                                ? `${securityCoverage.offRuns2.length} Kasus Libur Beruntun`
+                                                : '100% Aman / Terpenuhi')}
                                     </p>
                                 </div>
                             </div>
@@ -872,6 +1441,62 @@
                                 </div>
                             </div>
                         </div>
+
+                        {securityCoverage.shortageDaysCount > 0 && (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 mb-8 print:hidden">
+                                <p className="text-sm font-semibold text-yellow-900 mb-3">
+                                    {securityCoverage.shortageDaysCount} hari tidak dapat ditutup secara legal — dibutuhkan personil tambahan atau penyesuaian request:
+                                </p>
+                                <ul className="space-y-3">
+                                    {securityCoverage.details.map(det => (
+                                        <li key={det.day} className="text-sm text-yellow-800 bg-white/60 border border-yellow-100 rounded-xl p-3">
+                                            <p className="font-medium">
+                                                Hari ke-{det.day} ({det.day} {getMonthName(selectedMonth)} {selectedYear}): {det.reason}
+                                            </p>
+                                            <p className="text-xs text-yellow-700 mt-1.5">
+                                                Sistem menolak melanggar aturan. Menutupnya tanpa personil baru mustahil — coba ubah/hapus request di hari itu (klik sel jadwal
+                                                &bull; Request), atau tambah personil, lalu Generate ulang.
+                                            </p>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+
+                        {securityCoverage.violations.length > 0 && (
+                            <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 mb-8 print:hidden">
+                                <p className="text-sm font-semibold text-orange-900 mb-2">Pelanggaran aturan yang perlu ditinjau:</p>
+                                <ul className="space-y-1">
+                                    {securityCoverage.violations.slice(0, 5).map((v, i) => (
+                                        <li key={i} className="text-sm text-orange-800">{v}</li>
+                                    ))}
+                                    {securityCoverage.violations.length > 5 && (
+                                        <li className="text-sm text-orange-700">
+                                            ...dan {securityCoverage.violations.length - 5} pelanggaran lainnya
+                                        </li>
+                                    )}
+                                </ul>
+                            </div>
+                        )}
+
+                        {securityCoverage.offRuns2.length > 0 && (
+                            <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 mb-8 print:hidden">
+                                <p className="text-sm font-semibold text-indigo-900 mb-3">
+                                    Aturan "tanpa 2 hari libur beruntun" belum 100% — {securityCoverage.offRuns2.length} klaster libur beruntun tersisa di luar yang Anda minta:
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    {securityCoverage.offRuns2.map((r, i) => (
+                                        <span key={i} className="text-xs font-medium text-indigo-800 bg-white border border-indigo-100 rounded-lg px-2 py-1">
+                                            {r.name}: hari ke-{r.day}&ndash;{r.day + r.len - 1}
+                                        </span>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-indigo-700 mt-3">
+                                    Dengan jumlah personil & slot dinas per hari saat ini, pola libur ini secara matematis tak mungkin dihindari seluruhnya.
+                                    Kurangi request OFF berurutan, tambah personil (paling praktis +1), lalu Generate ulang.
+                                </p>
+                            </div>
+                        )}
 
                         {/* Tab Navigasi Menu */}
                         <div className="flex border-b border-slate-200 mb-6 print:hidden overflow-x-auto space-x-1">
@@ -939,7 +1564,7 @@
 
                                     <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                                         <button 
-                                            onClick={generateSchedule}
+                                            onClick={() => generateSchedule()}
                                             disabled={isGenerating}
                                             className="flex-1 md:flex-initial flex items-center justify-center space-x-2 bg-brand-600 hover:bg-brand-700 text-white font-semibold px-6 py-2.5 rounded-xl shadow-lg shadow-brand-500/10 transition-all disabled:opacity-50"
                                         >
@@ -1144,8 +1769,8 @@
                                                 className="w-full bg-slate-50 border-slate-200 border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
                                             >
                                                 <option value="BOTH">Bisa Keduanya (Pagi & Malam)</option>
-                                                <option value="S1">Prioritaskan Shift Pagi</option>
-                                                <option value="S2">Prioritaskan Shift Malam</option>
+                                                <option value="S1">Shift Pagi Saja</option>
+                                                <option value="S2">Shift Malam Saja</option>
                                             </select>
                                         </div>
 
@@ -1211,7 +1836,7 @@
                                                                 <span>Maks. kerja beruntun: {emp.maxConsecutive || 5} hari</span>
                                                                 <span>•</span>
                                                                 <span className="text-emerald-600 font-semibold">
-                                                                    {emp.prefShift === 'BOTH' ? 'Bisa Keduanya' : `Pref: Shift ${SHIFTS[emp.prefShift]?.name}`}
+                                                                    {emp.prefShift === 'BOTH' ? 'Bisa Keduanya' : `Pref: Shift ${SHIFTS[emp.prefShift]?.name} Saja`}
                                                                 </span>
                                                             </div>
                                                         </div>
@@ -1276,6 +1901,36 @@
                                             <p className="text-xs text-slate-500 mt-1">Setiap staf dilarang keras masuk Shift Pagi pada hari setelah mereka menyelesaikan Shift Malam sebelumnya demi menjaga keselamatan fisik tim.</p>
                                         </div>
                                     </div>
+
+                                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex items-start space-x-3">
+                                        <div className="p-2 bg-brand-100 text-brand-700 rounded-lg">
+                                            <Icon name="Scale" className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm text-slate-900">Pembagian Shift Pagi & Malam Merata</h4>
+                                            <p className="text-xs text-slate-500 mt-1">Sistem otomatis menyeimbangkan jumlah shift pagi dan malam untuk setiap personil yang siap kedua shift (BOTH), sehingga tidak ada lagi personil yang dominan shift pagi atau malam.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex items-start space-x-3">
+                                        <div className="p-2 bg-indigo-100 text-indigo-700 rounded-lg">
+                                            <Icon name="CalendarOff" className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm text-slate-900">Tanpa 2 Hari Libur Beruntun</h4>
+                                            <p className="text-xs text-slate-500 mt-1">Tidak ada personil yang libur 2 hari berturut-turut kecuali hari-hari tersebut memang merupakan hari libur yang ia minta (request OFF). Siapa pun yang libur kemarin wajib dinas hari ini bila memungkinkan.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex items-start space-x-3">
+                                        <div className="p-2 bg-violet-100 text-violet-700 rounded-lg">
+                                            <Icon name="History" className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm text-slate-900">Kesinambungan Riwayat Bulan Sebelumnya</h4>
+                                            <p className="text-xs text-slate-500 mt-1">Saat generate jadwal bulan baru, sistem membaca riwayat bulan sebelumnya (total shift pagi/malam, shift terakhir, dan hari kerja beruntun) agar pembagian tetap adil antar bulan dan aturan malam ke pagi tetap dihormati.</p>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -1285,9 +1940,52 @@
                             <div className="space-y-8">
                                 {/* Total Kinerja Jam Kerja Karyawan */}
                                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                                    <h3 className="font-bold text-lg text-slate-900 mb-2">Statistik Kinerja & Beban Jam Kerja Karyawan</h3>
-                                    <p className="text-sm text-slate-500 mb-6">Ringkasan akumulasi jam kerja bulanan untuk masing-masing personil demi mengontrol beban kerja yang merata.</p>
-                                    
+                                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                                        <div>
+                                            <h3 className="font-bold text-lg text-slate-900">Statistik Kinerja & Beban Jam Kerja Karyawan</h3>
+                                            <p className="text-sm text-slate-500 mt-1">Ringkasan akumulasi jam kerja bulanan untuk masing-masing personil demi mengontrol beban kerja yang merata.</p>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3 print:hidden">
+                                            <div className="flex flex-col">
+                                                <label className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Bulan</label>
+                                                <select
+                                                    value={selectedMonth}
+                                                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                                                    className="bg-slate-100 border-0 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-brand-500 cursor-pointer"
+                                                >
+                                                    {Array.from({ length: 12 }).map((_, i) => (
+                                                        <option key={i} value={i}>{getMonthName(i)}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            <div className="flex flex-col">
+                                                <label className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Tahun</label>
+                                                <select
+                                                    value={selectedYear}
+                                                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                                                    className="bg-slate-100 border-0 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-brand-500 cursor-pointer"
+                                                >
+                                                    {(() => {
+                                                        const years = new Set();
+                                                        const nowY = new Date().getFullYear();
+                                                        years.add(nowY);
+                                                        years.add(nowY + 1);
+                                                        Object.keys(allSchedules).forEach(k => {
+                                                            if (/^\d{4}_\d{1,2}$/.test(k)) {
+                                                                const yy = Number(k.split('_')[0]);
+                                                                if (!Number.isNaN(yy)) years.add(yy);
+                                                            }
+                                                        });
+                                                        return [...years].sort((a, b) => a - b).map(y => (
+                                                            <option key={y} value={y}>{y}</option>
+                                                        ));
+                                                    })()}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                         {employees.map((emp, idx) => {
                                             const { stats, totalHours, totalWorkDays } = getEmployeeStats(emp.id);
